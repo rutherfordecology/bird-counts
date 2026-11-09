@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.0 — 2026-11-09
+- Name prefix per path: with two or more paths, each gets its own prefix box under "Name prefix" (blank = the main prefix), showing its point count and name range. Numbering starts at 01 for each prefix and runs on across paths that share one. Hovering a path on the map highlights its box.
+- Drag any point to move it, e.g. onto a track. A moved point stays where you put it (marked "moved"), its old spot isn't refilled, and points further along re-space from it. Its popup has "Put back". "Restore deleted" leaves moved points alone.
+- Path prefixes and moved points are kept in saved sites and the GeoJSON file; GPX, KML, CSV and the print sheet mark moved points.
+
 ## v0.6.0 — 2026-11-09
 - "Add point": click on the map to add your own points, e.g. at wetlands. They can sit closer than the spacing; generated points further along the path re-space from them and everything is renumbered in order. Added points are teal and can be dragged; each belongs to the path it's nearest to.
 - Delete any point from its popup or with × in the table. Deleting a generated point keeps the points after it where they are, measured from your added points if any are nearby; "Restore deleted" brings deleted points back.

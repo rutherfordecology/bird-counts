@@ -43,6 +43,9 @@
   td.act button { padding: 0 6px; line-height: 18px; font-size: 13px; color: var(--muted); }
   td.act button:hover { color: #b3261e; border-color: #b3261e; }
   .tag-added { color: #0f8b8d; font-weight: 600; }
+  #pathPrefixes .row { margin-top: 4px; }
+  #pathPrefixes .row.hl label { color: #b8860b; font-weight: 600; }
+  .pp-n { color: var(--muted, #666); font-size: 12px; }
   .leaflet-popup-content button { margin-top: 6px; padding: 3px 8px; font-size: 12.5px; }
   body.adding #map, body.adding #map .leaflet-interactive { cursor: crosshair; }
   button.on { background: #0f8b8d; color: #fff; border-color: #0f8b8d; }
@@ -122,11 +125,12 @@
       <label for="prefix">Name prefix</label>
       <input type="text" id="prefix" value="P" style="width:60px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit">
     </div>
+    <div id="pathPrefixes"></div>
     <div class="row">
       <button id="addPtBtn" disabled title="Click on the map to add a point of your own, e.g. at a wetland. It may be closer than the spacing; points further along the path re-space from it.">Add point</button>
       <button id="restoreBtn" disabled title="Bring back the points you deleted">Restore deleted</button>
     </div>
-    <div class="summary" id="editHint">Added points can sit closer than the spacing. Points further along the path re-space from them. Click a point to delete it if it's too close.</div>
+    <div class="summary" id="editHint">Drag any point to move it, e.g. onto a track. Moved and added points stay where you put them; points further along the path re-space from them. Click a point to delete it or put it back.</div>
     <div class="summary" id="summary">No path yet.</div>
     <div class="row">
       <button id="gpxBtn" disabled>GPX</button>
@@ -147,7 +151,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -234,7 +238,7 @@ function stationsAlong(latlngs, spacing, placed, manual = [], deleted = [], used
     let last = -1;
     while (mi < man.length && man[mi].along <= upTo) {
       const m = man[mi++];
-      out.push({ lat: m.lat, lng: m.lng, along: m.along, added: true, id: m.id, off: m.off });
+      out.push({ lat: m.lat, lng: m.lng, along: m.along, added: true, id: m.id, off: m.off, ...(m.from ? { moved: true } : {}) });
       all.push(m); last = m.along;
     }
     return last;
@@ -289,7 +293,10 @@ function rebuild(opts = {}) {
     const { stations: s } = stationsAlong(layer.getLatLngs(), spacing, placed, byPath[i], deleted, used);
     s.forEach(p => stations.push({ ...p, path: i + 1 }));
   });
-  stations.forEach((p, i) => p.name = prefix + String(i + 1).padStart(stations.length >= 100 ? 3 : 2, '0'));
+  // each path can have its own prefix (blank = the main one); numbering runs on across paths that share a prefix
+  const pre = n => (layers[n - 1]?.prefix || '').trim() || prefix, total = {}, seen = {};
+  stations.forEach(p => total[pre(p.path)] = (total[pre(p.path)] || 0) + 1);
+  stations.forEach(p => { const k = pre(p.path); seen[k] = (seen[k] || 0) + 1; p.name = k + String(seen[k]).padStart(total[k] >= 100 ? 3 : 2, '0'); });
   renderStations();
   if (!opts.silent) markChanged();
 }
@@ -308,15 +315,14 @@ function renderStations() {
     p.e = Math.round(e); p.n = Math.round(n);
     p.close = p.nearest < spacing - 0.5;
     const ring = p.close ? '#ffb000' : '#fff';
-    const popup = `<b>${p.name}</b>${p.added ? ' <span class="tag-added">added</span>' : ''}<br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}<br>NZTM ${p.e} E ${p.n} N<br>${p.gap != null ? `${Math.round(p.gap)} m straight line from previous point<br>` : ''}${isFinite(p.nearest) ? `Nearest other point ${Math.round(p.nearest)} m${p.close ? ` <b style="color:#b36b00">(under ${spacing} m)</b>` : ''}<br>` : ''}${Math.round(p.along)} m along path ${p.path}${p.added && p.off >= 5 ? ` (${Math.round(p.off)} m off it)` : ''}${p.added ? '<br><i>Drag to move.</i>' : ''}<br><button data-del="${i}">${p.added ? 'Remove added point' : 'Delete point'}</button>`;
-    const tip = { permanent: true, direction: 'right', offset: [6, 0], className: 'pt-label' + (p.added ? ' pt-added' : '') + (p.close ? ' pt-close' : '') };
-    if (p.added) {
-      p.marker = L.marker([p.lat, p.lng], { draggable: true, keyboard: false, icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7], tooltipAnchor: [1, 0],
-        html: `<div style="width:14px;height:14px;background:#0f8b8d;border:2px solid ${ring};border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.35);box-sizing:border-box"></div>` }) });
-      p.marker.on('dragend', ev => { const m = manual.find(x => x.id === p.id); if (!m) return; const ll = ev.target.getLatLng(); m.lat = +ll.lat.toFixed(7); m.lng = +ll.lng.toFixed(7); rebuild(); });
-    } else {
-      p.marker = L.circleMarker([p.lat, p.lng], { radius: 6, color: ring, weight: p.close ? 3 : 2, fillColor: '#e0592a', fillOpacity: 1 });
-    }
+    const isNew = p.added && !p.moved;   // added by you (teal); moved points keep the orange of generated ones
+    const tag = p.moved ? ' <span class="tag-added">moved</span>' : p.added ? ' <span class="tag-added">added</span>' : '';
+    const popup = `<b>${p.name}</b>${tag}<br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}<br>NZTM ${p.e} E ${p.n} N<br>${p.gap != null ? `${Math.round(p.gap)} m straight line from previous point<br>` : ''}${isFinite(p.nearest) ? `Nearest other point ${Math.round(p.nearest)} m${p.close ? ` <b style="color:#b36b00">(under ${spacing} m)</b>` : ''}<br>` : ''}${Math.round(p.along)} m along path ${p.path}${p.added && p.off >= 5 ? ` (${Math.round(p.off)} m off it)` : ''}<br><i>Drag to move.</i><br>${p.moved ? `<button data-back="${i}">Put back</button> ` : ''}<button data-del="${i}">${isNew ? 'Remove added point' : 'Delete point'}</button>`;
+    const tip = { permanent: true, direction: 'right', offset: [6, 0], className: 'pt-label' + (isNew ? ' pt-added' : '') + (p.close ? ' pt-close' : '') };
+    const size = p.added ? 14 : 12;
+    p.marker = L.marker([p.lat, p.lng], { draggable: true, autoPan: true, keyboard: false, icon: L.divIcon({ className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2], tooltipAnchor: [1, 0],
+      html: `<div style="width:${size}px;height:${size}px;background:${isNew ? '#0f8b8d' : '#e0592a'};border:${p.close ? 3 : 2}px solid ${ring};border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.35);box-sizing:border-box;cursor:move"></div>` }) });
+    p.marker.on('dragend', ev => movePoint(p, ev.target.getLatLng()));
     p.marker.bindTooltip(p.name, tip).bindPopup(popup).addTo(pointLayer);
   });
   renderList(totalLen, paths.getLayers().length, spacing);
@@ -332,9 +338,35 @@ function deletePoint(i) {
   else deleted.push({ lat: +p.lat.toFixed(7), lng: +p.lng.toFixed(7) });
   rebuild();
 }
+// Moving a generated point turns it into a fixed point (remembering where it came from, so the
+// original spot isn't filled again); moving an added or already-moved point just updates it.
+const r7 = x => +x.toFixed(7);
+const sameSpot = (a, b) => a && b && a.lat === b.lat && a.lng === b.lng;
+const isMovedFrom = d => manual.some(m => sameSpot(m.from, d));
+function movePoint(p, ll) {
+  if (p.added) {
+    const m = manual.find(x => x.id === p.id); if (!m) return;
+    m.lat = r7(ll.lat); m.lng = r7(ll.lng);
+  } else {
+    const from = { lat: r7(p.lat), lng: r7(p.lng) };
+    deleted.push({ ...from });
+    manual.push({ id: nextId++, lat: r7(ll.lat), lng: r7(ll.lng), from });
+  }
+  rebuild();
+}
+function putBack(i) {
+  const p = stations[i], m = p && manual.find(x => x.id === p.id);
+  if (!m || !m.from) return;
+  map.closePopup();
+  manual = manual.filter(x => x !== m);
+  const di = deleted.findIndex(d => sameSpot(d, m.from)); if (di >= 0) deleted.splice(di, 1);
+  rebuild();
+}
 map.on('popupopen', e => {
-  const b = e.popup.getElement()?.querySelector('button[data-del]');
+  const el = e.popup.getElement();
+  const b = el?.querySelector('button[data-del]'), back = el?.querySelector('button[data-back]');
   if (b) b.onclick = () => deletePoint(+b.dataset.del);
+  if (back) back.onclick = () => putBack(+back.dataset.back);
 });
 
 function renderList(totalLen, pathCount, spacing) {
@@ -342,21 +374,23 @@ function renderList(totalLen, pathCount, spacing) {
   ['gpxBtn', 'kmlBtn', 'csvBtn', 'printBtn'].forEach(id => $(id).disabled = !has);
   $('addPtBtn').disabled = !pathCount;
   if (!pathCount && adding) setAdding(false);
-  $('restoreBtn').disabled = !deleted.length;
-  $('restoreBtn').textContent = deleted.length ? `Restore deleted (${deleted.length})` : 'Restore deleted';
+  const nDel = deleted.filter(d => !isMovedFrom(d)).length;
+  $('restoreBtn').disabled = !nDel;
+  $('restoreBtn').textContent = nDel ? `Restore deleted (${nDel})` : 'Restore deleted';
+  renderPathPrefixes();
   if (!pathCount) {
     $('summary').textContent = 'No path yet.';
     $('list').innerHTML = '<div class="empty">Click <b>Draw path</b>, click along your route, then click the last point again (or <b>Finish</b>) to end it. Drag vertices with the edit tool on the map to adjust.</div>';
     return;
   }
   const km = totalLen >= 1000 ? (totalLen / 1000).toFixed(2) + ' km' : Math.round(totalLen) + ' m';
-  const nAdded = stations.filter(p => p.added).length, nClose = stations.filter(p => p.close).length;
-  $('summary').innerHTML = `${stations.length} points${nAdded ? ` (${nAdded} added)` : ''} · ${km} of path${pathCount > 1 ? ` across ${pathCount} paths` : ''} · ${nClose
+  const nAdded = stations.filter(p => p.added && !p.moved).length, nMoved = stations.filter(p => p.moved).length, nClose = stations.filter(p => p.close).length;
+  $('summary').innerHTML = `${stations.length} points${nAdded || nMoved ? ` (${[nAdded && nAdded + ' added', nMoved && nMoved + ' moved'].filter(Boolean).join(', ')})` : ''} · ${km} of path${pathCount > 1 ? ` across ${pathCount} paths` : ''} · ${nClose
     ? `<b style="color:#b36b00">${nClose} point${nClose === 1 ? ' is' : 's are'} under ${spacing} m from another</b> (amber ring)`
-    : `every point at least ${spacing} m (straight line) from every other`}${deleted.length ? ` · ${deleted.length} deleted` : ''}`;
+    : `every point at least ${spacing} m (straight line) from every other`}${nDel ? ` · ${nDel} deleted` : ''}`;
   const multi = pathCount > 1;
   $('list').innerHTML = `<table><thead><tr><th>Point</th>${multi ? '<th>Path</th>' : ''}<th title="Straight-line distance from the previous point">Gap (m)</th><th>NZTM E</th><th>NZTM N</th><th></th></tr></thead><tbody>${
-    stations.map((p, i) => `<tr data-i="${i}"${p.close ? ' class="close"' : ''}><td>${p.name}${p.added ? ' <span class="tag-added" title="Added by you">+</span>' : ''}</td>${multi ? `<td>${p.path}</td>` : ''}<td class="gap">${p.gap != null ? Math.round(p.gap) : '–'}</td><td>${p.e}</td><td>${p.n}</td><td class="act"><button data-del="${i}" title="${p.added ? 'Remove this added point' : 'Delete this point'}">×</button></td></tr>`).join('')
+    stations.map((p, i) => `<tr data-i="${i}"${p.close ? ' class="close"' : ''}><td>${p.name}${p.moved ? ' <span class="tag-added" title="Moved by you">↔</span>' : p.added ? ' <span class="tag-added" title="Added by you">+</span>' : ''}</td>${multi ? `<td>${p.path}</td>` : ''}<td class="gap">${p.gap != null ? Math.round(p.gap) : '–'}</td><td>${p.e}</td><td>${p.n}</td><td class="act"><button data-del="${i}" title="${p.added && !p.moved ? 'Remove this added point' : 'Delete this point'}">×</button></td></tr>`).join('')
   }</tbody></table>`;
 }
 
@@ -369,6 +403,29 @@ $('list').addEventListener('click', e => {
   map.setView([p.lat, p.lng], Math.max(map.getZoom(), 16));
   p.marker.openPopup();
 });
+
+// One prefix box per path when there is more than one path (blank = the main prefix).
+function renderPathPrefixes() {
+  const layers = paths.getLayers(), box = $('pathPrefixes');
+  if (layers.length < 2) { box.innerHTML = ''; return; }
+  if (box.querySelectorAll('input').length !== layers.length) {
+    box.innerHTML = layers.map((l, i) => `<div class="row"><label for="pp${i}" style="padding-left:12px">Path ${i + 1}</label><input type="text" id="pp${i}" data-pp="${i}" placeholder="${esc($('prefix').value.trim())}" style="width:60px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit"> <span class="pp-n"></span></div>`).join('');
+  }
+  box.querySelectorAll('input[data-pp]').forEach(inp => {
+    const l = layers[+inp.dataset.pp];
+    if (document.activeElement !== inp) inp.value = l.prefix || '';
+    inp.placeholder = $('prefix').value.trim();
+    const pts = stations.filter(p => p.path === +inp.dataset.pp + 1);
+    inp.parentElement.querySelector('.pp-n').textContent = pts.length ? `${pts.length} points: ${pts[0].name}–${pts[pts.length - 1].name}` : 'no points';
+  });
+}
+$('pathPrefixes').addEventListener('input', e => {
+  const i = e.target.dataset.pp; if (i == null) return;
+  const l = paths.getLayers()[+i]; if (!l) return;
+  l.prefix = e.target.value.trim(); rebuild();
+});
+paths.on('mouseover', e => { const i = paths.getLayers().indexOf(e.layer); $(`pp${i}`)?.closest('.row')?.classList.add('hl'); });
+paths.on('mouseout', () => document.querySelectorAll('#pathPrefixes .hl').forEach(r => r.classList.remove('hl')));
 
 // ---------- drawing events ----------
 $('drawBtn').onclick = () => { setAdding(false); polyDrawer.enable(); };
@@ -386,7 +443,7 @@ function setAdding(on) {
   $('addPtBtn').textContent = on ? 'Done adding' : 'Add point';
   $('editHint').innerHTML = on
     ? '<b>Click on the map to add a point.</b> Add as many as you need, then press <b>Done adding</b> (or Esc).'
-    : "Added points can sit closer than the spacing. Points further along the path re-space from them. Click a point to delete it if it's too close.";
+    : "Drag any point to move it, e.g. onto a track. Moved and added points stay where you put them; points further along the path re-space from them. Click a point to delete it or put it back.";
 }
 $('addPtBtn').onclick = () => { if (!adding) polyDrawer.disable(); setAdding(!adding); };
 map.on('click', e => {
@@ -396,7 +453,7 @@ map.on('click', e => {
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && adding) setAdding(false); });
 map.on('draw:drawstart draw:editstart', () => setAdding(false));
-$('restoreBtn').onclick = () => { if (!deleted.length) return; deleted = []; rebuild(); };
+$('restoreBtn').onclick = () => { const keep = deleted.filter(isMovedFrom); if (keep.length === deleted.length) return; deleted = keep; rebuild(); };
 map.on(L.Draw.Event.CREATED, e => { e.layer.setStyle(lineStyle); paths.addLayer(e.layer); rebuild(); });
 map.on(L.Draw.Event.EDITED + ' ' + L.Draw.Event.DELETED, rebuild);
 map.on('draw:editvertex draw:editmove', rebuild);
@@ -416,25 +473,25 @@ const stamp = () => localDate(Date.now());
 function pathCoords() { return paths.getLayers().map(l => l.getLatLngs()); }
 
 $('gpxBtn').onclick = () => {
-  const wpts = stations.map(p => `  <wpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}"><name>${esc(p.name)}</name><desc>${Math.round(p.along)} m along path ${p.path}${p.added ? ' (added)' : ''}</desc><sym>Flag, Blue</sym></wpt>`).join('\n');
+  const wpts = stations.map(p => `  <wpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}"><name>${esc(p.name)}</name><desc>${Math.round(p.along)} m along path ${p.path}${p.moved ? ' (moved)' : p.added ? ' (added)' : ''}</desc><sym>Flag, Blue</sym></wpt>`).join('\n');
   const trks = pathCoords().map((ll, i) => `  <trk><name>Path ${i + 1}</name><trkseg>${ll.map(c => `<trkpt lat="${c.lat.toFixed(7)}" lon="${c.lng.toFixed(7)}"/>`).join('')}</trkseg></trk>`).join('\n');
   download(`bird-count-points-${stamp()}.gpx`, `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Bird Count Points ${VERSION}" xmlns="http://www.topografix.com/GPX/1/1">\n${wpts}\n${trks}\n</gpx>\n`, 'application/gpx+xml');
 };
 $('kmlBtn').onclick = () => {
-  const pms = stations.map(p => `<Placemark><name>${esc(p.name)}</name><description>${Math.round(p.along)} m along path ${p.path}${p.added ? ' (added)' : ''}; NZTM ${p.e} E ${p.n} N</description><Point><coordinates>${p.lng.toFixed(7)},${p.lat.toFixed(7)}</coordinates></Point></Placemark>`).join('\n');
+  const pms = stations.map(p => `<Placemark><name>${esc(p.name)}</name><description>${Math.round(p.along)} m along path ${p.path}${p.moved ? ' (moved)' : p.added ? ' (added)' : ''}; NZTM ${p.e} E ${p.n} N</description><Point><coordinates>${p.lng.toFixed(7)},${p.lat.toFixed(7)}</coordinates></Point></Placemark>`).join('\n');
   const lines = pathCoords().map((ll, i) => `<Placemark><name>Path ${i + 1}</name><Style><LineStyle><color>ff3fd2ff</color><width>3</width></LineStyle></Style><LineString><coordinates>${ll.map(c => `${c.lng.toFixed(7)},${c.lat.toFixed(7)}`).join(' ')}</coordinates></LineString></Placemark>`).join('\n');
   download(`bird-count-points-${stamp()}.kml`, `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Bird count points</name>\n${lines}\n${pms}\n</Document></kml>\n`, 'application/vnd.google-earth.kml+xml');
 };
 $('csvBtn').onclick = () => {
-  const rows = [['point', 'path', 'along_m', 'lat', 'lon', 'nztm_e', 'nztm_n', 'added']]
-    .concat(stations.map(p => [p.name, p.path, Math.round(p.along), p.lat.toFixed(7), p.lng.toFixed(7), p.e, p.n, p.added ? 'Y' : '']));
+  const rows = [['point', 'path', 'along_m', 'lat', 'lon', 'nztm_e', 'nztm_n', 'added', 'moved']]
+    .concat(stations.map(p => [p.name, p.path, Math.round(p.along), p.lat.toFixed(7), p.lng.toFixed(7), p.e, p.n, p.added && !p.moved ? 'Y' : '', p.moved ? 'Y' : '']));
   download(`bird-count-points-${stamp()}.csv`, rows.map(r => r.join(',')).join('\r\n') + '\r\n', 'text/csv');
 };
 $('printBtn').onclick = () => {
   map.fitBounds(paths.getBounds(), { padding: [30, 30] });
   $('printSheet').innerHTML = `<h2>Bird count points · ${stations.length} points, ${$('spacing').value} m spacing</h2>
     <table><thead><tr><th>Point</th><th>NZTM E</th><th>NZTM N</th><th>Lat, lon</th><th>Date / time</th><th>Weather</th><th>Notes</th></tr></thead><tbody>${
-      stations.map(p => `<tr><td><b>${p.name}</b>${p.added ? ' (added)' : ''}</td><td>${p.e}</td><td>${p.n}</td><td>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>`).join('')
+      stations.map(p => `<tr><td><b>${p.name}</b>${p.moved ? ' (moved)' : p.added ? ' (added)' : ''}</td><td>${p.e}</td><td>${p.n}</td><td>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>`).join('')
     }</tbody></table>`;
   setTimeout(() => window.print(), 600);
 };
@@ -453,7 +510,8 @@ function snapshot() {
     spacing: +$('spacing').value || 200,
     prefix: $('prefix').value,
     paths: pathCoords().map(ll => ll.map(c => [+c.lat.toFixed(7), +c.lng.toFixed(7)])),
-    points: stations.map(p => ({ name: p.name, path: p.path, along: Math.round(p.along * 10) / 10, lat: +p.lat.toFixed(7), lng: +p.lng.toFixed(7), ...(p.added ? { added: true, id: p.id, off: Math.round(p.off || 0) } : {}) })),
+    pathPrefixes: paths.getLayers().map(l => l.prefix || ''),
+    points: stations.map(p => ({ name: p.name, path: p.path, along: Math.round(p.along * 10) / 10, lat: +p.lat.toFixed(7), lng: +p.lng.toFixed(7), ...(p.added ? { added: true, id: p.id, off: Math.round(p.off || 0) } : {}), ...(p.moved ? { moved: true } : {}) })),
     manual: manual.map(m => ({ ...m })),
     deleted: deleted.map(d => ({ ...d })),
     existing: existing.map(p => ({ ...p })),
@@ -474,7 +532,8 @@ function loadSite(s) {
   deleted = (s.deleted || []).map(d => ({ ...d }));
   nextId = manual.reduce((m, x) => Math.max(m, +x.id || 0), 0) + 1;
   renderExisting();
-  (s.paths || []).forEach(ll => { if (ll.length > 1) paths.addLayer(L.polyline(ll, lineStyle)); });
+  (s.paths || []).forEach((ll, i) => { if (ll.length > 1) { const l = L.polyline(ll, lineStyle); l.prefix = (s.pathPrefixes || [])[i] || ''; paths.addLayer(l); } });
+  $('pathPrefixes').innerHTML = '';
   if (s.points && s.points.length) {
     stations = s.points.map(p => ({ ...p }));
     renderStations();
@@ -527,10 +586,10 @@ $('saveFileBtn').onclick = () => {
   const s = snapshot();
   const fc = {
     type: 'FeatureCollection',
-    birdCounts: { name: s.name, spacing: s.spacing, prefix: s.prefix, savedAt: s.savedAt, version: VERSION, deleted: s.deleted },
+    birdCounts: { name: s.name, spacing: s.spacing, prefix: s.prefix, pathPrefixes: s.pathPrefixes, savedAt: s.savedAt, version: VERSION, deleted: s.deleted, manual: s.manual },
     features: [
-      ...s.paths.map((ll, i) => ({ type: 'Feature', properties: { kind: 'path', path: i + 1 }, geometry: { type: 'LineString', coordinates: ll.map(([la, ln]) => [ln, la]) } })),
-      ...s.points.map(p => ({ type: 'Feature', properties: { kind: 'point', name: p.name, path: p.path, along_m: p.along, added: !!p.added, nztm_e: stations.find(x => x.name === p.name)?.e, nztm_n: stations.find(x => x.name === p.name)?.n }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })),
+      ...s.paths.map((ll, i) => ({ type: 'Feature', properties: { kind: 'path', path: i + 1, prefix: s.pathPrefixes[i] || s.prefix }, geometry: { type: 'LineString', coordinates: ll.map(([la, ln]) => [ln, la]) } })),
+      ...s.points.map(p => ({ type: 'Feature', properties: { kind: 'point', name: p.name, path: p.path, along_m: p.along, added: !!p.added && !p.moved, moved: !!p.moved, nztm_e: stations.find(x => x.name === p.name)?.e, nztm_n: stations.find(x => x.name === p.name)?.n }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })),
       ...s.existing.map(p => ({ type: 'Feature', properties: { kind: p.kind === 'photopoint' ? 'existing-photopoint' : 'existing-station', line: p.line, number: p.num, nztm_e: p.e, nztm_n: p.n }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })),
     ],
   };
@@ -650,11 +709,11 @@ async function parseImport(f) {
       const meta = g.birdCounts, lines = [];
       feats.forEach(ft => { const t = ft.geometry?.type, c = ft.geometry?.coordinates; if (t === 'LineString') lines.push(c); if (t === 'MultiLineString') lines.push(...c); });
       const pts = feats.filter(ft => ft.geometry?.type === 'Point' && ft.properties?.kind === 'point')
-        .map(ft => ({ name: ft.properties.name, path: ft.properties.path || 1, along: ft.properties.along_m || 0, lat: ft.geometry.coordinates[1], lng: ft.geometry.coordinates[0], ...(ft.properties.added ? { added: true } : {}) }));
+        .map(ft => ({ name: ft.properties.name, path: ft.properties.path || 1, along: ft.properties.along_m || 0, lat: ft.geometry.coordinates[1], lng: ft.geometry.coordinates[0], ...(ft.properties.added || ft.properties.moved ? { added: true } : {}), ...(ft.properties.moved ? { moved: true } : {}) }));
       const ex = feats.filter(ft => ft.geometry?.type === 'Point' && /^existing-/.test(ft.properties?.kind || ''))
         .map(ft => { const q = ft.properties, [lng, lat] = ft.geometry.coordinates, p = mkExisting(q.kind === 'existing-photopoint' ? 'photopoint' : 'station', q.line, q.number, lat, lng);
           return { ...p, e: q.nztm_e ?? p.e, n: q.nztm_n ?? p.n }; });
-      return { site: { name: meta.name || base, spacing: meta.spacing, prefix: meta.prefix, paths: lines.map(l => l.map(([ln, la]) => [la, ln])), points: pts, existing: ex, deleted: meta.deleted || [] } };
+      return { site: { name: meta.name || base, spacing: meta.spacing, prefix: meta.prefix, pathPrefixes: meta.pathPrefixes, manual: meta.manual, paths: lines.map(l => l.map(([ln, la]) => [la, ln])), points: pts, existing: ex, deleted: meta.deleted || [] } };
     }
     const paths = [], ext = [];
     feats.forEach(ft => {
