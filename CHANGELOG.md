@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.3 — 2026-11-09
+- Importing bird-count data (eBird-style sheets such as the 2024 Waimata data): the station now comes from "Location Name", not from "Number", which there is the count of birds. Before, such an import gave one point per bird count, numbered by how many birds were seen.
+- One point per station: where rows give a station several positions, the one most rows agree on is kept, and the import message lists those stations.
+- A station numbered 101–499 with no line is put on line 1–4 by its hundreds (205 → 2-05), including in sites already saved in the browser, so its line gets a route.
+
 ## v0.8.2 — 2026-11-09
 - Existing stations on each line are joined by a blue line in number order (1-01 → 1-02 → …), so each line shows as a route to follow. Hover it to see which line it is.
 

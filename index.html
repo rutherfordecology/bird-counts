@@ -87,7 +87,7 @@
 <body>
 <aside id="panel">
   <header>
-    <h1>Bird Count Points <span class="ver">v0.8.2</span></h1>
+    <h1>Bird Count Points <span class="ver">v0.8.3</span></h1>
     <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
   </header>
   <div class="controls">
@@ -160,7 +160,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -745,11 +745,14 @@ function exIcon(kind) {
 }
 function renderExisting() {
   exStationLayer.clearLayers(); exPptLayer.clearLayers();
+  existing.forEach(withLine);   // sites saved before lines were worked out from the number
   // each line's stations joined in number order (1-01, 1-02 …): the route to walk
   const lines = {};
   existing.filter(p => p.kind === 'station' && p.line != null && p.line !== '').forEach(p => (lines[p.line] = lines[p.line] || []).push(p));
-  Object.entries(lines).forEach(([ln, pts]) => {
+  Object.entries(lines).forEach(([ln, list]) => {
+    let pts = list;
     pts.sort((a, b) => (parseFloat(a.num) - parseFloat(b.num)) || String(a.num).localeCompare(String(b.num)));
+    pts = pts.filter((p, i) => !i || p.num !== pts[i - 1].num);   // a station listed at two spots: the route uses the first
     if (pts.length > 1) L.polyline(pts.map(p => [p.lat, p.lng]), { color: '#2364c9', weight: 3, opacity: .85, interactive: true })
       .bindTooltip(`Line ${esc(ln)}`, { sticky: true }).addTo(exStationLayer);
   });
@@ -786,7 +789,11 @@ function readSheetRows(rows, kindDefault) {
   const col = (re, not) => h.findIndex((t, i) => re.test(t) && !(not && not.test(t)));
   const cE = col(/east/i), cN = col(/north/i), cLat = col(/^lat|latitude/i), cLon = col(/^lon|^lng|longitude/i);
   const cLine = col(/line/i);
-  let cNum = h.findIndex((t, i) => i !== cLine && /number|^no\.?$|^id$|^name$/i.test(t) && !/east|north|grid/i.test(t));
+  const isCounts = h.some(t => /^common name$|^species$/i.test(t));   // one row per bird: many rows per station
+  // The station's name/number. A bird-count sheet (eBird style) has a "Number" column that is the count of birds,
+  // so a location/station/site column wins over anything called "number".
+  let cNum = h.findIndex((t, i) => i !== cLine && /^location( name)?$|^station( (name|no\.?|number))?$|^site( name)?$|^point( (name|no\.?|number))?$/i.test(t));
+  if (cNum < 0) cNum = h.findIndex((t, i) => i !== cLine && /number|^no\.?$|^id$|^name$/i.test(t) && !/east|north|grid|observer/i.test(t) && !(isCounts && /^number$/i.test(t)));
   if (cNum < 0) cNum = h.findIndex((t, i) => i !== cLine && /station|point|ppt|photo/i.test(t) && !/east|north|grid|lat|lon/i.test(t));
   const cKind = col(/type|kind/i);
   const out = [];
@@ -803,19 +810,40 @@ function readSheetRows(rows, kindDefault) {
     if (!(lat < -25 && lat > -56 && lng > 160 && lng < 185)) continue;   // outside NZ: probably a stray row
     const kindCell = cKind >= 0 ? String(r[cKind] ?? '') : '';
     const kind = /photo|ppt/i.test(kindCell) ? 'photopoint' : /station/i.test(kindCell) ? 'station' : kindDefault;
-    out.push({ kind, line: cLine >= 0 && r[cLine] != null ? String(r[cLine]).trim() : null, num: cNum >= 0 && r[cNum] != null ? String(r[cNum]).trim() : String(out.length + 1),
-      lat: +lat.toFixed(7), lng: +lng.toFixed(7), e: Math.round(e), n: Math.round(n) });
+    out.push(withLine({ kind, line: cLine >= 0 && r[cLine] != null ? String(r[cLine]).trim() : null, num: cNum >= 0 && r[cNum] != null ? String(r[cNum]).trim() : String(out.length + 1),
+      lat: +lat.toFixed(7), lng: +lng.toFixed(7), e: Math.round(e), n: Math.round(n) }));
   }
-  return out;
+  // One point per station. Where rows give a station more than one position, keep the one most rows agree on.
+  const byStation = new Map();
+  out.forEach(p => {
+    const k = [p.kind, p.line, p.num].join('|'), pos = p.lat.toFixed(6) + ',' + p.lng.toFixed(6);
+    if (!byStation.has(k)) byStation.set(k, new Map());
+    const m = byStation.get(k); if (!m.has(pos)) m.set(pos, { p, n: 0 }); m.get(pos).n++;
+  });
+  const kept = [], conflicts = [];
+  byStation.forEach(m => {
+    const opts = [...m.values()].sort((a, b) => b.n - a.n);
+    kept.push(opts[0].p);
+    if (opts.length > 1 && opts[0].p.kind === 'station') conflicts.push(opts[0].p.line ? `${opts[0].p.line}-${String(opts[0].p.num).padStart(2, '0')}` : opts[0].p.num);
+  });
+  kept.conflicts = conflicts;
+  return kept;
 }
 // ---------- importing files (button or drag and drop) ----------
 // A site saved from this tool (GeoJSON, or GPX/KML exported here) opens as that site.
 // Anything else is added to the current site: lines become paths, points become existing
 // stations (or photopoints, when their name/folder/style mentions "ppt" or "photo").
 const isPhoto = s => /ppt|photo/i.test(s || '');
+// A station numbered 101…499 with no line given is line 1-4 (hundreds), number 01-99: 205 → line 2, no. 5.
+function withLine(p) {
+  if (p.kind === 'station' && (p.line == null || p.line === '') && /^[1-9]\d\d$/.test(String(p.num ?? '').trim())) {
+    const n = +p.num; p.line = String(Math.floor(n / 100)); p.num = String(n % 100);
+  }
+  return p;
+}
 function mkExisting(kind, line, num, lat, lng) {
   const [e, n] = proj4('EPSG:4326', 'EPSG:2193', [lng, lat]);
-  return { kind, line: line == null || line === '' ? null : String(line).trim(), num: num == null ? '' : String(num).trim(), lat: +(+lat).toFixed(7), lng: +(+lng).toFixed(7), e: Math.round(e), n: Math.round(n) };
+  return withLine({ kind, line: line == null || line === '' ? null : String(line).trim(), num: num == null ? '' : String(num).trim(), lat: +(+lat).toFixed(7), lng: +(+lng).toFixed(7), e: Math.round(e), n: Math.round(n) });
 }
 const inNZ = (lat, lng) => lat < -25 && lat > -56 && lng > 160 && lng < 185;
 
@@ -840,7 +868,7 @@ async function parseImport(f) {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, blankrows: false });
       const kind = isPhoto(sh) || (wb.SheetNames.length === 1 && isPhoto(name)) ? 'photopoint' : 'station';
       const got = readSheetRows(rows, kind);
-      per.push(`sheet “${sh.trim()}”: ${got.length}`);
+      per.push(`sheet “${sh.trim()}”: ${got.length}${got.conflicts?.length ? ` (${got.conflicts.length} station${got.conflicts.length === 1 ? ' has' : 's have'} rows at different spots; kept the spot most rows give: ${got.conflicts.join(', ')})` : ''}`);
       ext.push(...got);
     });
     if (!ext.length) throw new Error('No rows with coordinates found. Expected columns for easting and northing (NZTM) or latitude and longitude.');
