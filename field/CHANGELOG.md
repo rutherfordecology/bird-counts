@@ -1,5 +1,12 @@
 # Bird Count Field — changelog
 
+## v0.2.0 — 2026-11-09
+- Built-in sites: the Waimata stations (124 on Lines 1–4) are part of the app, so it opens ready to use with nothing to load. Setup → Built-in sites switches between sites; loading your own points file still works.
+- Photopoints show on the map as small purple dots for reference (not counted).
+- Counting screen: likelihood reads "41% of past counts on Line 1", or "not yet on Line 1 · 6% overall"; the species list opens at the top for each new count.
+- App updates arrive on the next open when there's signal (it waits up to 3 s, then uses the saved copy).
+- Map buttons rearranged so nothing covers the arrival banner or the next-point card.
+
 ## v0.1.0 — 2026-11-09
 - First version of the phone app for five-minute bird counts, a companion to the Bird Count Points planner.
 - Load points from the planner's GeoJSON. Existing stations become loops by line (Line 1–4) and are named as in past data (101, 102…); drawn paths become Path 1, Path 2…; photopoints are left out.

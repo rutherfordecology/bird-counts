@@ -149,8 +149,13 @@
     <div class="card">
       <h2>Points</h2>
       <div class="muted" id="surveyInfo">No points loaded.</div>
+      <label class="f" for="siteSel">Built-in sites</label>
+      <div class="row">
+        <select id="siteSel" style="flex:1;min-width:0"></select>
+        <button class="primary" id="siteLoadBtn">Use</button>
+      </div>
       <div class="row" style="margin-top:10px">
-        <button class="primary" id="loadPointsBtn">Load points file…</button>
+        <button id="loadPointsBtn">Load points file…</button>
         <input type="file" id="pointsFile" accept=".geojson,.json,.gpx" hidden>
       </div>
       <div class="muted" style="margin-top:8px">A GeoJSON saved from the Bird Count Points planner (Save to file). Existing stations become loops by line (Line 1, Line 2…); drawn paths become Path 1, Path 2…</div>
@@ -226,7 +231,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -285,7 +290,7 @@ $('loopSel').onchange = () => { S.loop = $('loopSel').value; persist(); drawPoin
 
 // Read a GeoJSON from the planner (or a plain GeoJSON / GPX of points)
 function parsePoints(text, filename) {
-  const pts = [];
+  const pts = [], photos = [];
   if (/\.gpx$/i.test(filename)) {
     const xml = new DOMParser().parseFromString(text, 'application/xml');
     [...xml.getElementsByTagNameNS('*', 'wpt')].forEach((w, i) => pts.push({ loop: 'Points', name: (w.getElementsByTagNameNS('*', 'name')[0] || {}).textContent || String(i + 1), lat: +w.getAttribute('lat'), lng: +w.getAttribute('lon'), order: i }));
@@ -296,7 +301,10 @@ function parsePoints(text, filename) {
   feats.forEach((ft, i) => {
     if (ft.geometry?.type !== 'Point') return;
     const q = ft.properties || {}, [lng, lat] = ft.geometry.coordinates;
-    if (q.kind === 'existing-photopoint') return;          // photopoints aren't count stations
+    if (q.kind === 'existing-photopoint') {                 // shown on the map for reference, not counted
+      photos.push({ name: `${q.line ?? ''} ${q.number ?? ''}`.trim(), lat, lng });
+      return;
+    }
     let loop, name, order;
     if (q.kind === 'existing-station') {
       const line = q.line ?? '', num = q.number ?? '';
@@ -311,23 +319,41 @@ function parsePoints(text, filename) {
     }
     pts.push({ loop, name: String(name), lat, lng, order });
   });
-  return { name: meta.name || filename.replace(/\.[^.]+$/, ''), pts };
+  return { name: meta.name || filename.replace(/\.[^.]+$/, ''), pts, photos };
+}
+// ids stay stable for the same loop + point name, so earlier counts still line up
+function useSurvey({ name, pts, photos }, source) {
+  if (!pts.length) throw new Error('No count points found.');
+  S.survey = { name: name.replace(/\s*\d{4}$/, ''), source, points: pts.map(p => ({ ...p, id: p.loop + '|' + p.name })), photos: photos || [] };
+  S.loop = loops()[0];
+  persist(); refreshAll(); fitLoop();
+  toast(`Loaded ${pts.length} points in ${loops().length} loop${loops().length === 1 ? '' : 's'}.`);
 }
 $('loadPointsBtn').onclick = () => $('pointsFile').click();
 $('pointsFile').onchange = async () => {
   const f = $('pointsFile').files[0]; $('pointsFile').value = '';
   if (!f) return;
   try {
-    const { name, pts } = parsePoints(await f.text(), f.name);
-    if (!pts.length) throw new Error('No count points found in the file.');
-    if (S.survey.points.length && !confirm(`Replace the ${S.survey.points.length} points loaded now with ${pts.length} from ${f.name}? Counts already recorded are kept.`)) return;
-    // ids stay stable for the same loop + point name, so earlier counts still line up
-    S.survey = { name: S.survey.name && S.survey.points.length ? S.survey.name : name.replace(/\s*\d{4}$/, ''), points: pts.map(p => ({ ...p, id: p.loop + '|' + p.name })) };
-    S.loop = loops()[0];
-    persist(); refreshAll(); fitLoop();
-    toast(`Loaded ${pts.length} points in ${loops().length} loop${loops().length === 1 ? '' : 's'}.`);
+    const parsed = parsePoints(await f.text(), f.name);
+    if (S.survey.points.length && !confirm(`Replace the ${S.survey.points.length} points loaded now with ${parsed.pts.length} from ${f.name}? Counts already recorded are kept.`)) return;
+    useSurvey(parsed, f.name);
   } catch (e) { alert('Could not read ' + f.name + ':\n' + e.message); }
 };
+
+// Built-in sites (field/sites/index.json): ready to use with nothing to load
+let SITES = [];
+async function loadSiteList() {
+  try { SITES = await (await fetch('sites/index.json')).json(); } catch (e) { SITES = []; }
+  $('siteSel').innerHTML = SITES.map(s => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(s.about)}</option>`).join('') || '<option>None</option>';
+  $('siteLoadBtn').disabled = !SITES.length;
+}
+async function loadBuiltIn(id, ask = true) {
+  const s = SITES.find(x => x.id === id); if (!s) return;
+  if (ask && S.survey.points.length && !confirm(`Switch to ${s.name}? Counts already recorded are kept.`)) return;
+  try { useSurvey(parsePoints(await (await fetch(s.file)).text(), s.file), 'built-in:' + s.id); }
+  catch (e) { alert('Could not load ' + s.name + ': ' + e.message); }
+}
+$('siteLoadBtn').onclick = () => loadBuiltIn($('siteSel').value);
 
 // ---------- map ----------
 const map = L.map('map', { zoomControl: false }).setView([-41, 174], 5);
@@ -351,6 +377,8 @@ const toNext = L.polyline([], { color: '#fff', weight: 3, dashArray: '6 6', opac
 
 function drawPoints() {
   ptLayer.clearLayers();
+  (S.survey.photos || []).forEach(p => L.circleMarker([p.lat, p.lng], { radius: 4, color: '#fff', weight: 1.5, fillColor: '#b02fb8', fillOpacity: .9 })
+    .bindPopup(`Photopoint ${esc(p.name)}`).addTo(ptLayer));
   S.survey.points.forEach(p => {
     const inLoop = p.loop === S.loop, done = countedToday(p);
     const m = L.circleMarker([p.lat, p.lng], { radius: inLoop ? 8 : 5, color: '#fff', weight: 2, fillColor: done ? '#2e9d5b' : inLoop ? '#e0592a' : '#888', fillOpacity: inLoop ? 1 : .7 })
@@ -775,6 +803,8 @@ function refreshAll() {
 $('aboutInfo').textContent = `Bird Count Field v${VERSION}. Species order: ${SPECIES_LOCAL.source}. "Other" searches eBird's full list (${SPECIES_ALL.length.toLocaleString()} names). Everything is stored on this phone only.`;
 
 refreshAll(); fitLoop(); startGps(); keepAwake();
+// first run: start with the first built-in site so there's nothing to load
+loadSiteList().then(() => { if (!S.survey.points.length && SITES.length) loadBuiltIn(SITES[0].id, false); });
 setInterval(() => { if ($('pointsView').classList.contains('active')) renderPoints(); }, 5000);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>

@@ -1,10 +1,11 @@
 // Bird Count Field: works offline.
 // - App files and libraries: cached on install, served cache-first.
 // - Map tiles: served from the offline cache when present (downloaded from Setup, or seen before).
-const APP = 'bc-app-v0.1.0-b';
+const APP = 'bc-app-v0.2.0';
 const TILES = 'bc-tiles-v1';
 const APP_FILES = [
   './', './index.html', './species.js', './manifest.webmanifest', './icon.svg',
+  './sites/index.json', './sites/waimata.geojson',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://unpkg.com/leaflet@1.9.4/dist/images/layers.png',
