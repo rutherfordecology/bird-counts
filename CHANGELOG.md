@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.8.2 — 2026-11-09
+- Existing stations on each line are joined by a blue line in number order (1-01 → 1-02 → …), so each line shows as a route to follow. Hover it to see which line it is.
+
 ## v0.8.1 — 2026-11-09
 - Existing stations are labelled line-number with two digits on the map: 1-01, 1-02 … 2-01, 2-02, instead of 1-1, 1-2.
 

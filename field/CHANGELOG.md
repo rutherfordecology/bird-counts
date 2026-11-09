@@ -1,5 +1,8 @@
 # Bird Count Field — changelog
 
+## v0.5.1 — 2026-11-09
+- Each loop is drawn as a route joining its points in order (101 → 102 → …). The loop you have chosen is yellow; the others are faint grey.
+
 ## v0.5.0 — 2026-11-09
 - Move a point you can't get to. Tapping Count far from the next point offers "Move it here and count"; tapping a point on the map offers "Move to where I am". Only points that have never been counted can move. Existing stations, which have past data, always stay put. A moved point can be put back until it has been counted.
 - Moved points stay moved for later visits, even when a new version of the site arrives from the planner. Counts at a moved point keep its planned position (new `planned_lat`/`planned_lon` columns at the end of My data). The Data tab lists moved points with a CSV, and the GitHub backup uploads `points/moved-<phone>.csv`.

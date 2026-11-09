@@ -87,7 +87,7 @@
 <body>
 <aside id="panel">
   <header>
-    <h1>Bird Count Points <span class="ver">v0.8.1</span></h1>
+    <h1>Bird Count Points <span class="ver">v0.8.2</span></h1>
     <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
   </header>
   <div class="controls">
@@ -160,7 +160,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -745,6 +745,14 @@ function exIcon(kind) {
 }
 function renderExisting() {
   exStationLayer.clearLayers(); exPptLayer.clearLayers();
+  // each line's stations joined in number order (1-01, 1-02 …): the route to walk
+  const lines = {};
+  existing.filter(p => p.kind === 'station' && p.line != null && p.line !== '').forEach(p => (lines[p.line] = lines[p.line] || []).push(p));
+  Object.entries(lines).forEach(([ln, pts]) => {
+    pts.sort((a, b) => (parseFloat(a.num) - parseFloat(b.num)) || String(a.num).localeCompare(String(b.num)));
+    if (pts.length > 1) L.polyline(pts.map(p => [p.lat, p.lng]), { color: '#2364c9', weight: 3, opacity: .85, interactive: true })
+      .bindTooltip(`Line ${esc(ln)}`, { sticky: true }).addTo(exStationLayer);
+  });
   // several photos are often taken from one spot: one marker per spot
   const groups = new Map();
   existing.forEach(p => {
