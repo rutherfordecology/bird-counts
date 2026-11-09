@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.4 — 2026-11-09
+- KML import reads each point's attribute fields: line and station number (e.g. "Line_number__optional_" and "Station_number" in the Waimata KML). Stations imported from such a KML now have their line, so they get labels like 2-05 and a route per line. Before, they came in with no line.
+- A line like "2p" marks a photopoint. Otherwise the nearest folder decides ("ppts…" or "stations…"), so a document named "ppts and stations" no longer turns every point into a photopoint.
+
 ## v0.8.3 — 2026-11-09
 - Importing bird-count data (eBird-style sheets such as the 2024 Waimata data): the station now comes from "Location Name", not from "Number", which there is the count of birds. Before, such an import gave one point per bird count, numbered by how many birds were seen.
 - One point per station: where rows give a station several positions, the one most rows agree on is kept, and the import message lists those stations.

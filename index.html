@@ -87,7 +87,7 @@
 <body>
 <aside id="panel">
   <header>
-    <h1>Bird Count Points <span class="ver">v0.8.3</span></h1>
+    <h1>Bird Count Points <span class="ver">v0.8.4</span></h1>
     <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
   </header>
   <div class="controls">
@@ -160,7 +160,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.8.3';
+const VERSION = '0.8.4';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -931,9 +931,21 @@ async function parseImport(f) {
       // folder names above the placemark, e.g. "Photopoints" or "Line 2"
       const folders = []; for (let el = pm.parentElement; el; el = el.parentElement) if (/^(Folder|Document)$/.test(el.localName)) folders.push(txt(el, 'name'));
       const pname = [...pm.children].find(c => c.localName === 'name')?.textContent?.trim() || '';
-      const kind = isPhoto([pname, pm.querySelector('styleUrl')?.textContent, ...folders].join(' ')) ? 'photopoint' : 'station';
+      // photopoint or station: a line like "2p" says photopoint; otherwise the nearest folder that says which
+      // (a document called "ppts and stations" says both), then the placemark's own name and style
+      const lineAttr = [...pm.getElementsByTagNameNS('*', 'SimpleData'), ...pm.getElementsByTagNameNS('*', 'Data')].find(d => /line/i.test(d.getAttribute('name') || ''));
+      const lineVal = (lineAttr?.localName === 'Data' ? lineAttr.getElementsByTagNameNS('*', 'value')[0]?.textContent : lineAttr?.textContent)?.trim() || '';
+      const say = t => isPhoto(t) && !/station/i.test(t) ? 'photopoint' : /station/i.test(t) && !isPhoto(t) ? 'station' : null;
+      const kind = /^\d+\s*p$/i.test(lineVal) ? 'photopoint' : /^\d+$/.test(lineVal) ? 'station'
+        : folders.map(say).find(Boolean) || (isPhoto([pname, pm.querySelector('styleUrl')?.textContent].join(' ')) ? 'photopoint' : 'station');
       tag(pm, 'LineString').forEach(ls => { const l = coordsOf(ls); if (l.length > 1) paths.push(l); });
-      tag(pm, 'Point').forEach(pt => { const [[la, ln]] = coordsOf(pt); ext.push(mkExisting(kind, null, pname, la, ln)); });
+      // attribute fields (ExtendedData: SimpleData or Data/value), e.g. "Line_number__optional_" = 2, "Station_number" = 5
+      const attrs = {};
+      tag(pm, 'SimpleData').forEach(d => attrs[d.getAttribute('name') || ''] = d.textContent.trim());
+      tag(pm, 'Data').forEach(d => attrs[d.getAttribute('name') || ''] = (tag(d, 'value')[0]?.textContent || '').trim());
+      const field = (re, not) => { const k = Object.keys(attrs).find(k => re.test(k) && !(not && not.test(k)) && attrs[k] !== ''); return k ? attrs[k] : null; };
+      const aLine = field(/line/i), aNum = field(/station|number|^no|^id$/i, /east|north|grid|observer|line/i);
+      tag(pm, 'Point').forEach(pt => { const [[la, ln]] = coordsOf(pt); ext.push(mkExisting(kind, aLine, aNum ?? pname, la, ln)); });
       if (!tag(pm, 'LineString').length && !tag(pm, 'Point').length) skipped++;
     });
     return { paths, ext, note: skipped ? `${skipped} polygon${skipped === 1 ? '' : 's'} or other shape${skipped === 1 ? '' : 's'} skipped` : '' };
