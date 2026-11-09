@@ -43,6 +43,7 @@
   td.act button { padding: 0 6px; line-height: 18px; font-size: 13px; color: var(--muted); }
   td.act button:hover { color: #b3261e; border-color: #b3261e; }
   .tag-added { color: #0f8b8d; font-weight: 600; }
+  #ghBox { margin-top: 6px; } #ghBox summary { cursor: pointer; font-weight: 600; } #ghBox .row, #ghBox > .summary { margin-top: 6px; }
   #pathPrefixes .row { margin-top: 4px; }
   #pathPrefixes .row.hl label { color: #b8860b; font-weight: 600; }
   .pp-n { color: var(--muted, #666); font-size: 12px; }
@@ -86,7 +87,7 @@
 <body>
 <aside id="panel">
   <header>
-    <h1>Bird Count Points <span class="ver">v0.6.0</span></h1>
+    <h1>Bird Count Points <span class="ver">v0.8.0</span></h1>
     <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
   </header>
   <div class="controls">
@@ -104,6 +105,14 @@
       <input type="file" id="fileInput" accept=".geojson,.json,.gpx,.kml,.kmz,.xlsx,.xls,.csv" multiple hidden>
     </div>
     <div class="summary" id="saveStatus"></div>
+    <details id="ghBox">
+      <summary>GitHub <span id="ghState" class="summary"></span></summary>
+      <div class="summary">With an access key, Save also puts the site on GitHub (<code>field/sites/</code>), where the field app picks it up as a built-in site, and saved sites can be opened from any computer. Every save is kept in the repo history.</div>
+      <div class="row"><label for="ghRepo">Repo</label><input type="text" id="ghRepo" style="flex:1;min-width:0;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit" autocomplete="off" spellcheck="false"></div>
+      <div class="row"><label for="ghToken">Key</label><input type="password" id="ghToken" placeholder="fine-grained token, Contents: read and write" style="flex:1;min-width:0;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit" autocomplete="off"></div>
+      <div class="row"><button id="ghSaveKeyBtn">Save key and test</button><button id="ghForgetBtn">Forget key</button></div>
+      <div class="summary" id="ghStatus"></div>
+    </details>
     <div class="summary" id="importStatus">Or drag files onto the page: xlsx, csv, KML, KMZ, GPX or GeoJSON.</div>
   </div>
   <div class="controls">
@@ -151,7 +160,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -549,12 +558,14 @@ function markChanged() { dirty = true; refreshSiteUI(); saveDraft(); }
 
 function refreshSiteUI() {
   const sites = readSites(), names = Object.keys(sites).sort((a, b) => a.localeCompare(b));
-  $('siteList').innerHTML = `<option value="">${names.length ? 'Open a saved site…' : 'No saved sites yet'}</option>` +
-    names.map(n => `<option value="${esc(n)}"${n === current ? ' selected' : ''}>${esc(n)} · ${[sites[n].points.length ? sites[n].points.length + ' new' : '', (sites[n].existing || []).length ? sites[n].existing.length + ' existing' : ''].filter(Boolean).join(', ') || 'empty'} · ${localDate(sites[n].savedAt)}</option>`).join('');
+  $('siteList').innerHTML = `<option value="">${names.length || repoSites.length ? 'Open a saved site…' : 'No saved sites yet'}</option>` +
+    (names.length && repoSites.length ? '<optgroup label="In this browser">' : '') +
+    names.map(n => `<option value="${esc(n)}"${n === current ? ' selected' : ''}>${esc(n)} · ${[sites[n].points.length ? sites[n].points.length + ' new' : '', (sites[n].existing || []).length ? sites[n].existing.length + ' existing' : ''].filter(Boolean).join(', ') || 'empty'} · ${localDate(sites[n].savedAt)}</option>`).join('') +
+    (repoSites.length ? `${names.length ? '</optgroup>' : ''}<optgroup label="On GitHub">${repoSites.map(r => `<option value="gh:${esc(r.id)}">${esc(r.name)} · ${esc(r.about || '')}</option>`).join('')}</optgroup>` : '');
   $('deleteSiteBtn').disabled = !current;
   $('saveFileBtn').disabled = !hasContent();
   $('saveStatus').textContent = current
-    ? `Working on “${current}”${dirty ? ' · unsaved changes' : ' · saved'}`
+    ? `Working on “${current}”${dirty ? ' · unsaved changes' : ' · saved'}${!dirty && ghNote.name === current ? ' · ' + ghNote.text : ''}`
     : (hasContent() ? 'Not saved yet. Give it a name and press Save.' : '');
 }
 
@@ -567,10 +578,12 @@ $('saveBtn').onclick = () => {
   sites[name] = snapshot();
   if (!writeSites(sites)) return;
   current = name; dirty = false; refreshSiteUI(); saveDraft();
+  if (GHP.token) uploadSite(sites[name]);
 };
 $('siteList').onchange = () => {
   const name = $('siteList').value;
   if (!name) return;
+  if (name.startsWith('gh:')) { openRepoSite(name.slice(3)); return; }
   if (dirty && hasContent() && !confirm('Open another site? Unsaved changes to the current one will be lost.')) { refreshSiteUI(); return; }
   loadSite(readSites()[name]);
   current = name; dirty = false; refreshSiteUI(); saveDraft();
@@ -582,9 +595,8 @@ $('deleteSiteBtn').onclick = () => {
 };
 
 // --- files: GeoJSON is our own format; GPX and KML tracks/waypoints can also be opened ---
-$('saveFileBtn').onclick = () => {
-  const s = snapshot();
-  const fc = {
+function siteGeojson(s) {
+  return {
     type: 'FeatureCollection',
     birdCounts: { name: s.name, spacing: s.spacing, prefix: s.prefix, pathPrefixes: s.pathPrefixes, savedAt: s.savedAt, version: VERSION, deleted: s.deleted, manual: s.manual },
     features: [
@@ -593,9 +605,133 @@ $('saveFileBtn').onclick = () => {
       ...s.existing.map(p => ({ type: 'Feature', properties: { kind: p.kind === 'photopoint' ? 'existing-photopoint' : 'existing-station', line: p.line, number: p.num, nztm_e: p.e, nztm_n: p.n }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })),
     ],
   };
+}
+$('saveFileBtn').onclick = () => {
+  const s = snapshot();
   const fname = (s.name || 'bird-count-site').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'bird-count-site';
-  download(`${fname}.geojson`, JSON.stringify(fc, null, 1), 'application/geo+json');
+  download(`${fname}.geojson`, JSON.stringify(siteGeojson(s), null, 1), 'application/geo+json');
 };
+// ---------- sites on GitHub ----------
+// Sites live in the repo as field/sites/<id>.geojson, listed in field/sites/index.json, which the
+// field app reads for its built-in sites. Reading needs no key (public repo); saving does.
+const GH_KEY = 'birdcounts.github';
+const GHP = Object.assign({ repo: 'rutherfordecology/bird-counts', token: '' }, (() => { try { return JSON.parse(localStorage.getItem(GH_KEY)) || {}; } catch (e) { return {}; } })());
+const ghpSave = () => { try { localStorage.setItem(GH_KEY, JSON.stringify(GHP)); } catch (e) {} };
+let repoSites = [], ghNote = {};
+async function gh(path, opts = {}) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
+  try {
+    return await fetch('https://api.github.com' + path, { ...opts, signal: ctl.signal, cache: 'no-store',
+      headers: { ...(GHP.token ? { Authorization: 'Bearer ' + GHP.token } : {}), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opts.headers || {}) } });
+  } finally { clearTimeout(timer); }
+}
+function ghProblem(r) {
+  if (!r) return 'no connection to GitHub.';
+  if (r.status === 401) return 'GitHub rejected the key (expired or mistyped?).';
+  if (r.status === 403) return "the key isn't allowed to write to this repo (or GitHub's hourly limit was reached).";
+  if (r.status === 404) return `${GHP.repo} not found, or the key can't see it.`;
+  return `GitHub said ${r.status}.`;
+}
+const ghErr = e => e instanceof Response ? ghProblem(e) : e.name === 'AbortError' || e instanceof TypeError ? 'no connection to GitHub.' : e.message;
+const contentsUrl = path => `/repos/${GHP.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
+const utf8b64 = t => { const b = new TextEncoder().encode(t); let out = ''; for (let i = 0; i < b.length; i += 0x8000) out += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(out); };
+const b64utf8 = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\s/g, '')), c => c.charCodeAt(0)));
+// Read a file: { text, sha }, or null if it isn't there.
+async function ghGet(path) {
+  const r = await gh(contentsUrl(path));
+  if (r.status === 404) return null;
+  if (!r.ok) throw r;
+  const j = await r.json();
+  if (j.encoding === 'base64' && j.content) return { text: b64utf8(j.content), sha: j.sha };
+  const raw = await gh(contentsUrl(path), { headers: { Accept: 'application/vnd.github.raw+json' } });   // files over 1 MB
+  if (!raw.ok) throw raw;
+  return { text: await raw.text(), sha: j.sha };
+}
+// Write a file; `edit` gets the current text (or null) and returns the new text. Retries once if it changed meanwhile.
+async function ghWrite(path, edit, message) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const cur = await ghGet(path);
+    const text = edit(cur ? cur.text : null);
+    if (cur && cur.text === text) return false;
+    const r = await gh(contentsUrl(path), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, content: utf8b64(text), ...(cur ? { sha: cur.sha } : {}) }) });
+    if (r.ok) return true;
+    if (r.status !== 409 && r.status !== 422) throw r;
+  }
+  throw new Error('GitHub kept refusing the update.');
+}
+const slug = n => n.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'site';
+function siteAbout(s) {
+  const ns = (s.existing || []).filter(p => p.kind === 'station').length, np = (s.existing || []).length - ns, nn = s.points.length, npaths = s.paths.length;
+  const main = [ns && `${ns} existing station${ns === 1 ? '' : 's'}`, nn && `${nn} new point${nn === 1 ? '' : 's'} on ${npaths} path${npaths === 1 ? '' : 's'}`].filter(Boolean).join(', ') || 'empty';
+  return main + (np ? ` (${np} photopoint${np === 1 ? '' : 's'} shown for reference)` : '');
+}
+async function loadRepoSites() {
+  try { const f = await ghGet('field/sites/index.json'); repoSites = f ? JSON.parse(f.text) : []; }
+  catch (e) { repoSites = []; }
+  refreshSiteUI();
+}
+async function uploadSite(s) {
+  const status = (t, short) => { ghNote = { name: s.name, text: short || '' }; showGhState(t); refreshSiteUI(); };
+  status(`Saved in this browser. Uploading “${s.name}” to GitHub…`, 'uploading to GitHub…');
+  try {
+    const idx = await ghGet('field/sites/index.json');
+    const list = idx ? JSON.parse(idx.text) : [];
+    let entry = list.find(x => x.name === s.name);
+    if (!entry) { entry = { id: slug(s.name), name: s.name }; while (list.some(x => x.id === entry.id)) entry.id += '-2'; }
+    entry = { ...entry, file: entry.file || `sites/${entry.id}.geojson`, about: siteAbout(s) };
+    await ghWrite('field/' + entry.file, () => JSON.stringify(siteGeojson(s), null, 1) + '\n', `Site ${s.name}: ${entry.about}`);
+    await ghWrite('field/sites/index.json', txt => {
+      const l = txt ? JSON.parse(txt) : [];
+      const i = l.findIndex(x => x.id === entry.id);
+      if (i >= 0) l[i] = entry; else l.push(entry);
+      return JSON.stringify(l) + '\n';
+    }, `List site ${s.name}`);
+    status(`Saved “${s.name}” here and on GitHub. The field app gets it about a minute later.`, '✓ on GitHub');
+    loadRepoSites();
+  } catch (e) {
+    status(`Saved in this browser, but not on GitHub: ${ghErr(e)} Press Save again to retry.`, '✗ not on GitHub: ' + ghErr(e) + ' Press Save to retry.');
+  }
+}
+async function openRepoSite(id) {
+  const r = repoSites.find(x => x.id === id); if (!r) return;
+  if (dirty && hasContent() && !confirm(`Open ${r.name} from GitHub? Unsaved changes to the current site will be lost.`)) { refreshSiteUI(); return; }
+  $('saveStatus').textContent = `Opening ${r.name} from GitHub…`;
+  try {
+    const f = await ghGet('field/' + r.file);
+    if (!f) throw new Error('the file is missing from the repo.');
+    const got = await parseImport(new File([f.text], r.file.split('/').pop()));
+    if (!got.site) throw new Error('not a site file.');
+    got.site.name = r.name;
+    loadSite(got.site);
+    const sites = readSites(); sites[r.name] = snapshot(); writeSites(sites);   // keep a copy in this browser too
+    current = r.name; dirty = false; refreshSiteUI(); saveDraft();
+    $('saveStatus').textContent = `Opened “${r.name}” from GitHub.${GHP.token ? ' Save puts your changes back there.' : ' Add a key under GitHub to save changes back.'}`;
+  } catch (e) {
+    refreshSiteUI();
+    $('saveStatus').textContent = `Could not open ${r.name} from GitHub: ${ghErr(e)}`;
+  }
+}
+function showGhState(t) {
+  $('ghState').textContent = GHP.token ? '· on' : '· off';
+  if (t) $('ghStatus').textContent = t;
+}
+$('ghRepo').value = GHP.repo; $('ghToken').value = GHP.token;
+$('ghSaveKeyBtn').onclick = async () => {
+  const repo = $('ghRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$|\/$/g, ''), token = $('ghToken').value.trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { $('ghStatus').textContent = 'Repo should look like owner/name.'; return; }
+  if (!token) { $('ghStatus').textContent = 'Paste the key first.'; return; }
+  GHP.repo = repo; GHP.token = token; $('ghRepo').value = repo; ghpSave();
+  $('ghStatus').textContent = 'Checking…';
+  let r = null; try { r = await gh(`/repos/${repo}`); } catch (e) {}
+  if (!r || !r.ok) { showGhState('✗ ' + ghProblem(r)); return; }
+  const info = await r.json();
+  if (info.permissions && !info.permissions.push) { showGhState('✗ The key can read this repo but not write to it. Give it Contents: Read and write.'); return; }
+  showGhState(`✓ Key works. Save now also puts the site on GitHub (${repo}).`);
+  loadRepoSites();
+};
+$('ghForgetBtn').onclick = () => { GHP.token = ''; $('ghToken').value = ''; ghpSave(); showGhState('Key removed from this browser.'); };
+showGhState(GHP.token ? `Save also puts the site on GitHub (${GHP.repo}).` : 'Off: sites are saved in this browser only.');
+
 // ---------- existing stations and photopoints (read from a spreadsheet) ----------
 let existing = [];   // [{ kind: 'station'|'photopoint', line, num, lat, lng, e, n }]
 const EX = {
@@ -838,6 +974,7 @@ $('removeExistingBtn').onclick = () => {
     dirty = s.current ? !!s.dirty : hasContent();
   } else { rebuild(); renderExisting(); dirty = false; }
   refreshSiteUI();
+  loadRepoSites();
 })();
 </script>
 </body>

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.0 — 2026-11-09
+- Sites on GitHub. Under the new GitHub section, add an access key once; after that, Save also puts the site in the repo (`field/sites/<name>.geojson`, listed in `field/sites/index.json`). The field app then offers it under Built-in sites about a minute later. Every save is kept in the repo history.
+- "Open a saved site…" also lists the sites on GitHub (no key needed to open them), so a site can be opened and edited from any computer. Opening one keeps a copy in this browser.
+- The save line says whether the site reached GitHub ("✓ on GitHub", or why not, and to press Save to retry). Saving in the browser never depends on GitHub.
+- The version number in the header was stuck at v0.6.0; it now shows the real version.
+
 ## v0.7.0 — 2026-11-09
 - Name prefix per path: with two or more paths, each gets its own prefix box under "Name prefix" (blank = the main prefix), showing its point count and name range. Numbering starts at 01 for each prefix and runs on across paths that share one. Hovering a path on the map highlights its box.
 - Drag any point to move it, e.g. onto a track. A moved point stays where you put it (marked "moved"), its old spot isn't refilled, and points further along re-space from it. Its popup has "Put back". "Restore deleted" leaves moved points alone.
