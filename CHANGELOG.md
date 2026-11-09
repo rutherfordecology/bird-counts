@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.8.1 — 2026-11-09
+- Existing stations are labelled line-number with two digits on the map: 1-01, 1-02 … 2-01, 2-02, instead of 1-1, 1-2.
+
 ## v0.8.0 — 2026-11-09
 - Sites on GitHub. Under the new GitHub section, add an access key once; after that, Save also puts the site in the repo (`field/sites/<name>.geojson`, listed in `field/sites/index.json`). The field app then offers it under Built-in sites about a minute later. Every save is kept in the repo history.
 - "Open a saved site…" also lists the sites on GitHub (no key needed to open them), so a site can be opened and edited from any computer. Opening one keeps a copy in this browser.

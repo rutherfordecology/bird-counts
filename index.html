@@ -87,7 +87,7 @@
 <body>
 <aside id="panel">
   <header>
-    <h1>Bird Count Points <span class="ver">v0.8.0</span></h1>
+    <h1>Bird Count Points <span class="ver">v0.8.1</span></h1>
     <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
   </header>
   <div class="controls">
@@ -160,7 +160,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -755,7 +755,7 @@ function renderExisting() {
   groups.forEach(g => {
     const p = g[0], k = EX[p.kind];
     const byLine = {};
-    g.forEach(x => (byLine[x.line ?? ''] = byLine[x.line ?? ''] || []).push(x.num));
+    g.forEach(x => (byLine[x.line ?? ''] = byLine[x.line ?? ''] || []).push(p.kind === 'station' && /^\d$/.test(x.num) ? '0' + x.num : x.num));
     const label = Object.entries(byLine).map(([ln, nums]) => (ln !== '' ? (p.kind === 'station' ? ln + '-' : ln + ' ') : '') + nums.join(',')).join(' · ');
     L.marker([p.lat, p.lng], { icon: exIcon(p.kind), keyboard: false })
       .bindTooltip(esc(label), { permanent: true, direction: 'left', offset: [-3, 0], className: 'ex-label ' + k.cls })
