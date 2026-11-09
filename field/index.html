@@ -188,6 +188,11 @@
       <div class="row" style="margin-top:10px"><button id="testAlertBtn">Test alert</button></div>
     </div>
     <div class="card">
+      <h2>Keeping your data safe</h2>
+      <div class="muted">Each tap is saved on the phone as you go, and a count you haven't finished comes back if the phone dies or the app closes. Saved counts stay until you delete them. To protect against losing the phone, or someone clearing Chrome's data, use Data → <b>Back up now</b> at the end of each day.</div>
+      <div class="muted" id="storageState" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
       <h2>About</h2>
       <div class="muted" id="aboutInfo"></div>
     </div>
@@ -231,7 +236,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -245,12 +250,28 @@ let S = {
   loop: '',
 };
 function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s) S = { ...S, ...s, settings: { ...S.settings, ...(s.settings || {}) } }; } catch (e) {} }
+// Returns false (and says so loudly) if the phone refused to store the data.
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(S)); }
-  catch (e) { toast('Could not save on this phone: ' + e.message + '. Export your data now.', 8000); }
+  try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
+  catch (e) { storageFailed(e); return false; }
+}
+function storageFailed(e) {
+  alert('WARNING: the phone did not save the latest data (' + e.message + ').\n\nDon\'t close the app. Go to Data and tap Backup to get your counts off the phone.');
 }
 load();
-if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+// Ask the browser not to clear this app's storage when the phone is short of space.
+let storageProtected = null;
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persisted().then(p => p || navigator.storage.persist()).then(p => { storageProtected = p; showStorageState(); }).catch(() => {});
+}
+function showStorageState() {
+  const el = document.getElementById('storageState'); if (!el) return;
+  el.innerHTML = storageProtected ? '✓ Storage is protected: the phone won\'t clear it to free space.'
+    : storageProtected === false ? '⚠ Storage is not protected yet. Add the app to your home screen; the phone may then protect it.' : '';
+}
+// Counts that have never left the phone in an export or backup.
+const unexported = () => S.counts.filter(c => !c.exported);
+function markExported(cs) { const now = new Date().toISOString(); cs.forEach(c => c.exported = c.exported || now); persist(); }
 
 // ---------- helpers ----------
 function toast(msg, ms = 3000) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', ms); }
@@ -508,7 +529,45 @@ function likelihoodText(s, loop) {
 // ---------- the count ----------
 const countView = $('countView');
 let C = null, tick = null;   // count in progress
-function openCount(p) {
+
+// The count in progress is written to the phone after every tap, so a flat battery,
+// a crash or closing the app loses nothing: it reopens exactly where it was.
+const CURRENT_KEY = 'birdfield.current';
+function saveCurrent() {
+  if (!C) return;
+  try {
+    localStorage.setItem(CURRENT_KEY, JSON.stringify({
+      point: C.point, items: C.items, startedAt: C.startedAt ? C.startedAt.toISOString() : null,
+      endsAt: C.endsAt, finished: C.finished, editing: !!C.editing, gps: C.gps || null,
+      added: C.order.filter(s => s.extra).map(s => ({ name: s.name, sci: s.sci || '' })), savedAt: Date.now(),
+    }));
+  } catch (e) { storageFailed(e); }
+}
+const clearCurrent = () => { try { localStorage.removeItem(CURRENT_KEY); } catch (e) {} };
+function resumeCurrent() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(CURRENT_KEY)); } catch (e) {}
+  if (!s || !s.point) return false;
+  const p = S.survey.points.find(x => x.id === s.point.id) || s.point;   // still works if the points were changed
+  openCount(p, true);
+  C.items = s.items || {};
+  (s.added || []).forEach(a => { if (!C.order.some(o => o.name === a.name)) C.order.push({ ...a, extra: true }); });
+  Object.keys(C.items).forEach(n => { if (!C.order.some(o => o.name === n)) C.order.push({ name: n, sci: '', extra: true }); });
+  C.gps = s.gps; C.editing = s.editing;
+  if (s.startedAt) {
+    C.startedAt = new Date(s.startedAt); C.endsAt = s.endsAt;
+    $('timerBtn').style.display = 'none';
+    if (s.finished || Date.now() >= C.endsAt) {      // time ran out while the phone was off
+      C.finished = true; $('countHead').className = 'finished'; $('timer').textContent = 'Done';
+      $('timerBtn').textContent = C.editing ? 'Lock' : 'Edit'; $('timerBtn').style.display = '';
+    } else { $('countHead').className = 'running'; tick = setInterval(updateTimer, 250); updateTimer(); }
+  }
+  renderSpecies();
+  toast(`Your unsaved count at ${p.name} is back, as you left it.`, 5000);
+  return true;
+}
+
+function openCount(p, restoring = false) {
   C = { point: p, items: {}, order: speciesFor(p.loop), startedAt: null, endsAt: null, finished: false };
   $('countPt').textContent = `${p.name} · ${p.loop}`;
   $('countHead').className = '';
@@ -519,6 +578,7 @@ function openCount(p) {
   renderSpecies();
   $('spList').scrollTop = 0;
   keepAwake();
+  if (!restoring) saveCurrent();
 }
 function renderSpecies() {
   const total = Object.values(C.items).reduce((a, b) => a + b, 0), spp = Object.values(C.items).filter(n => n > 0).length;
@@ -538,6 +598,7 @@ $('spList').addEventListener('click', e => {
   C.items[s.name] = Math.max(0, (C.items[s.name] || 0) + (minus ? -1 : 1));
   if (!minus && !C.startedAt) startTimer();       // the first bird starts the clock if you forgot
   navigator.vibrate?.(minus ? 15 : 30);
+  saveCurrent();
   renderSpecies();
 });
 function startTimer() {
@@ -546,6 +607,7 @@ function startTimer() {
   C.gps = me ? { ...me } : null;
   $('countHead').className = 'running';
   $('timerBtn').style.display = 'none';
+  saveCurrent();
   tick = setInterval(updateTimer, 250); updateTimer();
 }
 function updateTimer() {
@@ -556,16 +618,17 @@ function updateTimer() {
     $('countHead').className = 'finished';
     $('timer').textContent = 'Done';
     $('timerBtn').textContent = 'Edit'; $('timerBtn').style.display = '';
-    alertUser('done'); renderSpecies();
+    alertUser('done'); saveCurrent(); renderSpecies();
   }
 }
 $('timerBtn').onclick = () => {
   if (!C.startedAt) return startTimer();
-  if (C.finished) { C.editing = !C.editing; $('timerBtn').textContent = C.editing ? 'Lock' : 'Edit'; renderSpecies(); }
+  if (C.finished) { C.editing = !C.editing; $('timerBtn').textContent = C.editing ? 'Lock' : 'Edit'; saveCurrent(); renderSpecies(); }
 };
 $('cancelCountBtn').onclick = () => {
   const any = Object.values(C.items).some(n => n > 0);
-  if (any && !confirm('Discard this count?')) return;
+  if (any && !confirm(`Discard this count at ${C.point.name}? The birds tapped so far will be deleted.`)) return;
+  clearCurrent();
   closeCount();
 };
 $('saveCountBtn').onclick = () => {
@@ -581,11 +644,16 @@ $('saveCountBtn').onclick = () => {
     items: C.order.filter(s => C.items[s.name] > 0).map(s => ({ name: s.name, sci: s.sci || '', n: C.items[s.name] })),
     app: VERSION,
   });
-  persist();
+  if (!persist()) { S.counts.pop(); return; }      // not stored: keep the count open (and its saved copy) rather than lose it
+  clearCurrent();
   if (target && target.id === p.id) target = null;
   closeCount();
-  toast(`Saved ${p.name}. ${loopPoints().filter(x => !countedToday(x)).length} left on ${S.loop}.`);
+  const left = loopPoints().filter(x => !countedToday(x)).length;
+  toast(`Saved ${p.name}. ${left} left on ${S.loop}.`);
   refreshAll();
+  if (!left && unexported().length) setTimeout(() => {
+    if (confirm(`${S.loop} is done. Save a backup of today's counts off the phone now? (Share it to Drive, email or Files.)`)) backupNow();
+  }, 400);
 };
 function closeCount() { clearInterval(tick); C = null; countView.classList.remove('show'); }
 
@@ -613,6 +681,7 @@ $('otherResults').addEventListener('click', e => {
   }
   C.items[C.order[i].name] = (C.items[C.order[i].name] || 0) + 1;
   if (!C.startedAt) startTimer();
+  saveCurrent();
   $('otherDlg').classList.remove('show');
   renderSpecies();
   $('spList').querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'center' });
@@ -641,7 +710,12 @@ function renderData() {
   const byDay = {};
   S.counts.forEach(c => (byDay[c.date] = byDay[c.date] || []).push(c));
   const days = Object.keys(byDay).sort().reverse();
+  const ux = unexported();
   $('dataPane').innerHTML = `
+    ${ux.length ? `<div class="card" style="border-color:#c98a00;background:#fff8e6"><h2>⚠ ${ux.length} count${ux.length === 1 ? '' : 's'} only on this phone</h2>
+      <div class="muted">Not in any export or backup yet. Save a backup off the phone (Drive, email or Files) at the end of each day.</div>
+      <div class="row" style="margin-top:8px"><button class="primary" id="backupNowBtn">Back up now</button></div></div>`
+      : S.counts.length ? '<div class="card muted">✓ Every count has been exported or backed up at least once.</div>' : ''}
     <div class="card"><h2>Export</h2>
       <div class="muted">${S.counts.length} count${S.counts.length === 1 ? '' : 's'} on this phone. Tick days to export, or leave all ticked.</div>
       <div id="dayPicks" style="margin:8px 0">${days.map(d => `<label style="display:block;padding:4px 0"><input type="checkbox" value="${d}" checked> ${d} · ${byDay[d].length} counts · ${[...new Set(byDay[d].map(c => c.loop))].join(', ')}</label>`).join('') || '<span class="muted">Nothing recorded yet.</span>'}</div>
@@ -666,7 +740,7 @@ $('dataPane').addEventListener('click', e => {
   }
   if (t.id === 'expMine') exportMine();
   if (t.id === 'expEbird') exportEbird();
-  if (t.id === 'expBackup') saveFile(`${fileStem()}-backup-${today()}.json`, JSON.stringify({ app: 'bird-count-field', version: VERSION, exported: new Date().toISOString(), ...S }, null, 1), 'application/json');
+  if (t.id === 'expBackup' || t.id === 'backupNowBtn') backupNow();
   if (t.id === 'restoreBtn') $('restoreFile').click();
 });
 $('dataPane').addEventListener('change', async e => {
@@ -680,6 +754,13 @@ $('dataPane').addEventListener('change', async e => {
     persist(); refreshAll(); toast(`Restored ${add.length} counts.`);
   } catch (err) { alert('Could not read the backup: ' + err.message); }
 });
+// A backup holds everything (all counts, points, settings) and can be restored from the Data tab.
+async function backupNow() {
+  if (!S.counts.length) return toast('No counts to back up yet.');
+  const ok = await saveFile(`${fileStem()}-backup-${today()}-${localTime(new Date()).replace(':', '')}.json`,
+    JSON.stringify({ app: 'bird-count-field', version: VERSION, exported: new Date().toISOString(), ...S }, null, 1), 'application/json');
+  if (ok) { markExported(S.counts); refreshAll(); toast('Backup saved off the phone.'); }
+}
 const selectedCounts = () => { const days = [...document.querySelectorAll('#dayPicks input:checked')].map(i => i.value); return S.counts.filter(c => days.includes(c.date)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)); };
 const fileStem = () => (S.survey.name || 'bird-counts').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'bird-counts';
 const csvCell = v => { v = String(v ?? ''); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
@@ -691,7 +772,8 @@ function exportMine() {
   const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id']];
   cs.forEach(c => (c.items.length ? c.items : [{ name: '(none recorded)', sci: '', n: 0 }]).forEach(x =>
     rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id])));
-  saveFile(`${fileStem()}-counts-${cs[0].date}${cs.length > 1 && cs[cs.length - 1].date !== cs[0].date ? '_to_' + cs[cs.length - 1].date : ''}.csv`, toCsv(rows), 'text/csv');
+  saveFile(`${fileStem()}-counts-${cs[0].date}${cs.length > 1 && cs[cs.length - 1].date !== cs[0].date ? '_to_' + cs[cs.length - 1].date : ''}.csv`, toCsv(rows), 'text/csv')
+    .then(ok => { if (ok) { markExported(cs); renderData(); } });
 }
 // eBird Record Format: no header, English (NZ) names, MM/DD/YYYY, plain UTF-8 without a BOM.
 function exportEbird() {
@@ -707,16 +789,21 @@ function exportEbird() {
         `Loop: ${c.loop}. Point ${c.point}. ${c.minutes}-minute bird count (seen or heard).${c.observer ? ' Observer: ' + c.observer + '.' : ''}`]);
     });
   });
-  saveFile(`${fileStem()}-ebird-${cs[0].date}.csv`, toCsv(rows), 'text/csv');
+  saveFile(`${fileStem()}-ebird-${cs[0].date}.csv`, toCsv(rows), 'text/csv');   // not counted as a backup: it leaves out empty counts
   const notes = [skipped.length && `${skipped.length} count${skipped.length === 1 ? '' : 's'} with no birds left out (eBird can't take empty checklists): ${skipped.join(', ')}`,
     unmatched.size && `Typed names eBird will ask you to match: ${[...unmatched].join(', ')}`].filter(Boolean);
   if (notes.length) alert(notes.join('\n\n'));
 }
+// Share sheet on phones (Drive, email, Files…), download elsewhere. Returns false if you cancelled.
 async function saveFile(name, text, type) {
   const file = new File([text], name, { type });
-  if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return true; }
+    catch (e) { if (e.name === 'AbortError') { toast('Not saved: sharing was cancelled.'); return false; } }
+  }
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  return true;
 }
 
 // ---------- offline map download ----------
@@ -804,7 +891,11 @@ $('aboutInfo').textContent = `Bird Count Field v${VERSION}. Species order: ${SPE
 
 refreshAll(); fitLoop(); startGps(); keepAwake();
 // first run: start with the first built-in site so there's nothing to load
-loadSiteList().then(() => { if (!S.survey.points.length && SITES.length) loadBuiltIn(SITES[0].id, false); });
+loadSiteList().then(async () => {
+  if (!S.survey.points.length && SITES.length) await loadBuiltIn(SITES[0].id, false);
+  resumeCurrent();                    // bring back a count that wasn't saved (flat battery, app closed…)
+});
+showStorageState();
 setInterval(() => { if ($('pointsView').classList.contains('active')) renderPoints(); }, 5000);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>

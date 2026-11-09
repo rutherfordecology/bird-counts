@@ -1,5 +1,12 @@
 # Bird Count Field — changelog
 
+## v0.3.0 — 2026-11-09
+- A count in progress is saved on the phone after every tap. If the phone dies, the app crashes, or Android closes it while you're in another app (e.g. Merlin), it reopens on that count exactly as you left it: birds, added species and timer. If the 5 minutes ran out meanwhile, it opens as finished.
+- If the phone ever refuses to save (e.g. storage full), you get a loud warning and the count stays open instead of disappearing.
+- Data tab warns when counts have never left the phone ("⚠ 3 counts only on this phone") with a "Back up now" button. Cancelling the share sheet doesn't count as backed up. Finishing a loop offers a backup straight away.
+- The app asks the phone to protect its storage, and Setup shows whether it agreed. A new Setup card explains how data is kept safe.
+- Discarding a count asks first and names the point.
+
 ## v0.2.0 — 2026-11-09
 - Built-in sites: the Waimata stations (124 on Lines 1–4) are part of the app, so it opens ready to use with nothing to load. Setup → Built-in sites switches between sites; loading your own points file still works.
 - Photopoints show on the map as small purple dots for reference (not counted).
