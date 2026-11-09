@@ -189,8 +189,22 @@
     </div>
     <div class="card">
       <h2>Keeping your data safe</h2>
-      <div class="muted">Each tap is saved on the phone as you go, and a count you haven't finished comes back if the phone dies or the app closes. Saved counts stay until you delete them. To protect against losing the phone, or someone clearing Chrome's data, use Data → <b>Back up now</b> at the end of each day.</div>
+      <div class="muted">Each tap is saved on the phone as you go, and a count you haven't finished comes back if the phone dies or the app closes. Saved counts stay until you delete them. To protect against losing the phone, turn on the GitHub backup below, and/or use Data → <b>Back up now</b>.</div>
       <div class="muted" id="storageState" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Backup to GitHub</h2>
+      <div class="muted">When there's reception, saved counts are copied to a GitHub repo automatically: one CSV and one JSON per day, plus a full backup. Every change is kept in the repo's history.</div>
+      <label class="f" for="ghRepo">Repo (owner/name)</label>
+      <input id="ghRepo" style="width:100%" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label class="f" for="ghToken">Access key (fine-grained token with Contents: read and write on that repo only)</label>
+      <input id="ghToken" type="password" style="width:100%" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="ghSaveBtn">Save and test</button>
+        <button id="ghSyncBtn">Sync now</button>
+        <button id="ghForgetBtn" class="danger">Forget key</button>
+      </div>
+      <div class="muted" id="ghStatus" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>About</h2>
@@ -236,7 +250,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -270,7 +284,7 @@ function showStorageState() {
     : storageProtected === false ? '⚠ Storage is not protected yet. Add the app to your home screen; the phone may then protect it.' : '';
 }
 // Counts that have never left the phone in an export or backup.
-const unexported = () => S.counts.filter(c => !c.exported);
+const unexported = () => S.counts.filter(c => !c.exported && !c.synced);
 function markExported(cs) { const now = new Date().toISOString(); cs.forEach(c => c.exported = c.exported || now); persist(); }
 
 // ---------- helpers ----------
@@ -651,7 +665,8 @@ $('saveCountBtn').onclick = () => {
   const left = loopPoints().filter(x => !countedToday(x)).length;
   toast(`Saved ${p.name}. ${left} left on ${S.loop}.`);
   refreshAll();
-  if (!left && unexported().length) setTimeout(() => {
+  markDayChanged(localDate(start));
+  if (!left && unexported().length && !GH.token) setTimeout(() => {
     if (confirm(`${S.loop} is done. Save a backup of today's counts off the phone now? (Share it to Drive, email or Files.)`)) backupNow();
   }, 400);
 };
@@ -712,8 +727,10 @@ function renderData() {
   const days = Object.keys(byDay).sort().reverse();
   const ux = unexported();
   $('dataPane').innerHTML = `
+    ${GH.token ? `<div class="card"><h2>☁ GitHub backup</h2><div class="muted" id="ghDataStatus">${esc(ghStatusText())}</div>
+      <div class="row" style="margin-top:8px"><button id="ghSyncBtn2">Sync now</button></div></div>` : ''}
     ${ux.length ? `<div class="card" style="border-color:#c98a00;background:#fff8e6"><h2>⚠ ${ux.length} count${ux.length === 1 ? '' : 's'} only on this phone</h2>
-      <div class="muted">Not in any export or backup yet. Save a backup off the phone (Drive, email or Files) at the end of each day.</div>
+      <div class="muted">${GH.token ? 'Waiting for reception to reach GitHub. You can also save a backup file now.' : 'Not in any export or backup yet. Turn on Backup to GitHub in Setup, or save a backup off the phone (Drive, email or Files) at the end of each day.'}</div>
       <div class="row" style="margin-top:8px"><button class="primary" id="backupNowBtn">Back up now</button></div></div>`
       : S.counts.length ? '<div class="card muted">✓ Every count has been exported or backed up at least once.</div>' : ''}
     <div class="card"><h2>Export</h2>
@@ -736,12 +753,13 @@ $('dataPane').addEventListener('click', e => {
   const t = e.target;
   if (t.dataset.del) {
     const c = S.counts.find(c => c.id === t.dataset.del);
-    if (c && confirm(`Delete the count at ${c.point} (${c.loop}, ${c.date} ${c.start})? This can't be undone.`)) { S.counts = S.counts.filter(x => x !== c); persist(); refreshAll(); }
+    if (c && confirm(`Delete the count at ${c.point} (${c.loop}, ${c.date} ${c.start})?${GH.token ? ' A copy stays in the GitHub history.' : ' This can\'t be undone.'}`)) { S.counts = S.counts.filter(x => x !== c); persist(); markDayChanged(c.date); refreshAll(); }
   }
   if (t.id === 'expMine') exportMine();
   if (t.id === 'expEbird') exportEbird();
   if (t.id === 'expBackup' || t.id === 'backupNowBtn') backupNow();
   if (t.id === 'restoreBtn') $('restoreFile').click();
+  if (t.id === 'ghSyncBtn2') syncNow(true);
 });
 $('dataPane').addEventListener('change', async e => {
   if (e.target.id !== 'restoreFile') return;
@@ -751,7 +769,7 @@ $('dataPane').addEventListener('change', async e => {
     const add = (b.counts || []).filter(c => !have.has(c.id));
     S.counts.push(...add);
     if (!S.survey.points.length && b.survey) S.survey = b.survey;
-    persist(); refreshAll(); toast(`Restored ${add.length} counts.`);
+    persist(); [...new Set(add.map(c => c.date))].forEach(markDayChanged); refreshAll(); toast(`Restored ${add.length} counts.`);
   } catch (err) { alert('Could not read the backup: ' + err.message); }
 });
 // A backup holds everything (all counts, points, settings) and can be restored from the Data tab.
@@ -769,9 +787,7 @@ const toCsv = rows => rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r
 // Your own long format: one row per species per count; a count with nothing seen still gets a row.
 function exportMine() {
   const cs = selectedCounts(); if (!cs.length) return toast('Tick at least one day.');
-  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id']];
-  cs.forEach(c => (c.items.length ? c.items : [{ name: '(none recorded)', sci: '', n: 0 }]).forEach(x =>
-    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id])));
+  const rows = mineRows(cs);
   saveFile(`${fileStem()}-counts-${cs[0].date}${cs.length > 1 && cs[cs.length - 1].date !== cs[0].date ? '_to_' + cs[cs.length - 1].date : ''}.csv`, toCsv(rows), 'text/csv')
     .then(ok => { if (ok) { markExported(cs); renderData(); } });
 }
@@ -805,6 +821,129 @@ async function saveFile(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   return true;
 }
+
+// ---------- backup to GitHub ----------
+// Settings live under their own key, so the access key never ends up in a backup file or export.
+// Each day with new or changed counts is "dirty" until its files are on GitHub:
+//   counts/<date>-<phone>.csv   (same columns as "Your CSV")
+//   counts/<date>-<phone>.json  (that day's counts as recorded)
+//   backups/<phone>-latest.json (everything; restorable from the Data tab)
+const GH_KEY = 'birdfield.github';
+const GH = Object.assign({ repo: 'rutherfordecology/bird-count-data', token: '', phone: Math.random().toString(36).slice(2, 6), dirty: [], last: '', error: '' },
+  (() => { try { return JSON.parse(localStorage.getItem(GH_KEY)) || {}; } catch (e) { return {}; } })());
+const ghSave = () => { try { localStorage.setItem(GH_KEY, JSON.stringify(GH)); } catch (e) {} };
+ghSave();
+let ghBusy = false;
+function markDayChanged(date) {
+  if (!GH.dirty.includes(date)) GH.dirty.push(date);
+  ghSave(); syncNow();
+}
+function ghStatusText() {
+  if (!GH.token) return 'Off.';
+  const when = GH.last ? ` Last upload ${new Date(GH.last).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.` : '';
+  if (ghBusy) return 'Uploading…' + when;
+  if (GH.dirty.length) return `${GH.dirty.length} day${GH.dirty.length === 1 ? '' : 's'} waiting to upload (${GH.dirty.join(', ')}). Tries again when there's reception.${GH.error ? ' Last try: ' + GH.error : ''}${when}`;
+  return `✓ Every saved count is on GitHub (${GH.repo}).${when}`;
+}
+function showGhStatus() {
+  const t = ghStatusText();
+  if ($('ghStatus')) $('ghStatus').textContent = t;
+  if ($('ghDataStatus')) $('ghDataStatus').textContent = t;
+}
+async function gh(path, opts = {}) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    return await fetch('https://api.github.com' + path, { ...opts, signal: ctl.signal, cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opts.headers || {}) } });
+  } finally { clearTimeout(timer); }
+}
+function ghProblem(r) {
+  if (!r) return 'no reception.';
+  if (r.status === 401) return 'GitHub rejected the access key (expired or mistyped?).';
+  if (r.status === 403) return 'the access key isn\'t allowed to write to this repo.';
+  if (r.status === 404) return `repo ${GH.repo} not found, or the key can't see it.`;
+  return `GitHub said ${r.status}.`;
+}
+const utf8b64 = s => { const b = new TextEncoder().encode(s); let out = ''; for (let i = 0; i < b.length; i += 0x8000) out += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(out); };
+async function gitBlobSha(s) {
+  const b = new TextEncoder().encode(s), head = new TextEncoder().encode(`blob ${b.length}\0`);
+  const all = new Uint8Array(head.length + b.length); all.set(head); all.set(b, head.length);
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-1', all))].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+// Create or update one file. Skips the commit if GitHub already has exactly this content.
+async function ghPut(path, text, message) {
+  const url = `/repos/${GH.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const g = await gh(url);
+    let sha;
+    if (g.ok) { sha = (await g.json()).sha; if (sha === await gitBlobSha(text)) return; }
+    else if (g.status !== 404) throw g;
+    const p = await gh(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, content: utf8b64(text), ...(sha ? { sha } : {}) }) });
+    if (p.ok) return;
+    if (p.status !== 409 && p.status !== 422) throw p;    // someone else changed it in between: read it again and retry once
+  }
+  throw new Error('GitHub kept refusing the update.');
+}
+function mineRows(cs) {
+  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id']];
+  cs.forEach(c => (c.items.length ? c.items : [{ name: '(none recorded)', sci: '', n: 0 }]).forEach(x =>
+    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id])));
+  return rows;
+}
+async function syncNow(manual = false) {
+  if (!GH.token || !GH.repo) { if (manual) toast('Set up Backup to GitHub in Setup first.'); return; }
+  if (ghBusy) return;
+  if (!GH.dirty.length && !manual) return;
+  if (manual && !GH.dirty.length) GH.dirty = [...new Set(S.counts.map(c => c.date))];   // "Sync now" re-checks every day
+  ghBusy = true; showGhStatus();
+  const who = S.settings.observer ? ` (${S.settings.observer})` : '';
+  try {
+    for (const date of [...GH.dirty].sort()) {
+      const cs = S.counts.filter(c => c.date === date).sort((a, b) => a.start.localeCompare(b.start));
+      const stem = `counts/${date}-${GH.phone}`, msg = `Counts ${date}: ${cs.length} point${cs.length === 1 ? '' : 's'}${who}`;
+      await ghPut(stem + '.csv', toCsv(mineRows(cs)), msg);
+      await ghPut(stem + '.json', JSON.stringify({ app: 'bird-count-field', version: VERSION, phone: GH.phone, date, counts: cs }, null, 1) + '\n', msg);
+      const now = new Date().toISOString();
+      cs.forEach(c => c.synced = now);
+      GH.dirty = GH.dirty.filter(d => d !== date);
+      persist(); ghSave();
+    }
+    await ghPut(`backups/${GH.phone}-latest.json`, JSON.stringify({ app: 'bird-count-field', version: VERSION, phone: GH.phone, exported: new Date().toISOString(), ...S }, null, 1) + '\n', `Full backup${who}`);
+    GH.last = new Date().toISOString(); GH.error = '';
+    if (manual) toast('Uploaded to GitHub.');
+  } catch (e) {
+    GH.error = e instanceof Response ? ghProblem(e) : e.name === 'AbortError' || e instanceof TypeError ? 'no reception.' : e.message;
+    if (manual) toast('Not uploaded: ' + GH.error, 5000);
+  } finally {
+    ghBusy = false; ghSave(); showGhStatus();
+    if ($('dataView').classList.contains('active')) renderData();
+  }
+}
+// Uploads whenever reception may have come back, and every minute while something is waiting.
+window.addEventListener('online', () => syncNow());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+setInterval(() => { if (GH.dirty.length && navigator.onLine !== false) syncNow(); }, 60000);
+
+$('ghRepo').value = GH.repo; $('ghToken').value = GH.token;
+$('ghSaveBtn').onclick = async () => {
+  const repo = $('ghRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$|\/$/g, ''), token = $('ghToken').value.trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return toast('Repo should look like owner/name.');
+  if (!token) return toast('Paste the access key first.');
+  GH.repo = repo; GH.token = token; $('ghRepo').value = repo; ghSave();
+  $('ghStatus').textContent = 'Checking…';
+  let r = null; try { r = await gh(`/repos/${repo}`); } catch (e) {}
+  if (!r || !r.ok) { GH.error = ghProblem(r); ghSave(); $('ghStatus').textContent = '✗ ' + GH.error; return; }
+  const info = await r.json();
+  if (info.permissions && !info.permissions.push) { $('ghStatus').textContent = '✗ The access key can read this repo but not write to it. Give it Contents: Read and write.'; return; }
+  GH.dirty = [...new Set([...GH.dirty, ...S.counts.map(c => c.date)])]; ghSave();
+  toast('GitHub backup is on.');
+  syncNow(true);
+};
+$('ghSyncBtn').onclick = () => syncNow(true);
+$('ghForgetBtn').onclick = () => {
+  if (!GH.token || !confirm('Remove the access key from this phone? Counts stop uploading until you add it again.')) return;
+  GH.token = ''; $('ghToken').value = ''; ghSave(); showGhStatus(); refreshAll();
+};
 
 // ---------- offline map download ----------
 const lon2x = (lng, z) => Math.floor((lng + 180) / 360 * 2 ** z);
@@ -887,7 +1026,7 @@ function refreshAll() {
   $('surveyInfo').textContent = S.survey.points.length ? `${S.survey.name || 'Survey'}: ${S.survey.points.length} points in ${ls.length} loop${ls.length === 1 ? '' : 's'} (${ls.join(', ')}).` : 'No points loaded.';
   $('surveyName').value = S.survey.name;
 }
-$('aboutInfo').textContent = `Bird Count Field v${VERSION}. Species order: ${SPECIES_LOCAL.source}. "Other" searches eBird's full list (${SPECIES_ALL.length.toLocaleString()} names). Everything is stored on this phone only.`;
+$('aboutInfo').textContent = `Bird Count Field v${VERSION}. Species order: ${SPECIES_LOCAL.source}. "Other" searches eBird's full list (${SPECIES_ALL.length.toLocaleString()} names). Everything is stored on this phone${GH.token ? `, and copied to GitHub (${GH.repo})` : ' only'}.`;
 
 refreshAll(); fitLoop(); startGps(); keepAwake();
 // first run: start with the first built-in site so there's nothing to load
@@ -896,6 +1035,9 @@ loadSiteList().then(async () => {
   resumeCurrent();                    // bring back a count that wasn't saved (flat battery, app closed…)
 });
 showStorageState();
+// counts saved before the GitHub backup existed (or while it was off) still need uploading
+if (GH.token) { S.counts.filter(c => !c.synced).forEach(c => GH.dirty.includes(c.date) || GH.dirty.push(c.date)); ghSave(); }
+showGhStatus(); syncNow();
 setInterval(() => { if ($('pointsView').classList.contains('active')) renderPoints(); }, 5000);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>

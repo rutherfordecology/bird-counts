@@ -1,5 +1,11 @@
 # Bird Count Field — changelog
 
+## v0.4.0 — 2026-11-09
+- Backup to GitHub (Setup): with a repo name and an access key, every saved count is copied to GitHub whenever there's reception. It tries right after each save, when signal comes back, when you return to the app, and every minute while something is waiting.
+- Files in the repo: `counts/<date>-<phone>.csv` (same columns as "My data"), `counts/<date>-<phone>.json`, and `backups/<phone>-latest.json` (restorable). Deleting a count updates that day's files; the old version stays in the repo history. Unchanged files aren't re-committed.
+- The Data tab shows the upload state ("✓ Every saved count is on GitHub" or "1 day waiting to upload"). Counts on GitHub count as backed up, so the "only on this phone" warning clears once they're uploaded.
+- The access key is stored apart from your data, so it never ends up in a backup or export. "Forget key" removes it.
+
 ## v0.3.0 — 2026-11-09
 - A count in progress is saved on the phone after every tap. If the phone dies, the app crashes, or Android closes it while you're in another app (e.g. Merlin), it reopens on that count exactly as you left it: birds, added species and timer. If the 5 minutes ran out meanwhile, it opens as finished.
 - If the phone ever refuses to save (e.g. storage full), you get a loud warning and the count stays open instead of disappearing.
