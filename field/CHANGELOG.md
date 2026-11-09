@@ -1,5 +1,10 @@
 # Bird Count Field — changelog
 
+## v0.5.0 — 2026-11-09
+- Move a point you can't get to. Tapping Count far from the next point offers "Move it here and count"; tapping a point on the map offers "Move to where I am". Only points that have never been counted can move. Existing stations, which have past data, always stay put. A moved point can be put back until it has been counted.
+- Moved points stay moved for later visits, even when a new version of the site arrives from the planner. Counts at a moved point keep its planned position (new `planned_lat`/`planned_lon` columns at the end of My data). The Data tab lists moved points with a CSV, and the GitHub backup uploads `points/moved-<phone>.csv`.
+- Edits saved in the planner reach the phone: when the app opens or comes back to the front with signal, a built-in site that has changed is updated ("Waimata updated from the planner: 1 added, 1 moved"). It waits while a count is open. Counts already recorded are untouched.
+
 ## v0.4.0 — 2026-11-09
 - Backup to GitHub (Setup): with a repo name and an access key, every saved count is copied to GitHub whenever there's reception. It tries right after each save, when signal comes back, when you return to the app, and every minute while something is waiting.
 - Files in the repo: `counts/<date>-<phone>.csv` (same columns as "My data"), `counts/<date>-<phone>.json`, and `backups/<phone>-latest.json` (restorable). Deleting a count updates that day's files; the old version stays in the repo history. Unchanged files aren't re-committed.

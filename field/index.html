@@ -51,6 +51,11 @@
   #arrival.show { display: block; animation: pulse 1s ease-in-out 3; }
   #arrival .row { display: flex; gap: 10px; align-items: center; }
   #arrival b { font-size: 22px; }
+  #sheet { position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,.45); display: none; align-items: flex-end; }
+  #sheet.show { display: flex; }
+  #sheet > div { background: var(--panel); width: 100%; border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  #sheet p { margin: 0 0 12px; font-size: 16px; }
+  #sheet button { display: block; width: 100%; margin-top: 8px; padding: 14px; font-size: 16px; }
   #arrival button { background: #fff; color: var(--done); border: 0; font-weight: 700; }
   @keyframes pulse { 50% { transform: scale(1.03); } }
   .pt-label { background: var(--todo); color: #fff; border: 0; border-radius: 9px; padding: 0 5px; font-weight: 700; font-size: 11px; box-shadow: none; }
@@ -141,6 +146,7 @@
     </div>
   </section>
 
+  <div id="sheet"><div><p id="sheetMsg"></p><div id="sheetBtns"></div></div></div>
   <section class="view" id="pointsView"><div id="pointsList"></div></section>
 
   <section class="view" id="dataView"><div class="pad" id="dataPane"></div></section>
@@ -250,7 +256,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -352,14 +358,14 @@ function parsePoints(text, filename) {
     } else {
       loop = q.loop || q.line && ('Line ' + q.line) || 'Points'; name = q.name ?? q.number ?? q.id ?? String(i + 1); order = i;
     }
-    pts.push({ loop, name: String(name), lat, lng, order });
+    pts.push({ loop, name: String(name), lat, lng, order, ...(q.kind === 'existing-station' ? { fixed: true } : {}) });
   });
   return { name: meta.name || filename.replace(/\.[^.]+$/, ''), pts, photos };
 }
 // ids stay stable for the same loop + point name, so earlier counts still line up
 function useSurvey({ name, pts, photos }, source) {
   if (!pts.length) throw new Error('No count points found.');
-  S.survey = { name: name.replace(/\s*\d{4}$/, ''), source, points: pts.map(p => ({ ...p, id: p.loop + '|' + p.name })), photos: photos || [] };
+  S.survey = { name: name.replace(/\s*\d{4}$/, ''), source, points: applyMoves(pts.map(p => ({ ...p, id: p.loop + '|' + p.name }))), photos: photos || [] };
   S.loop = loops()[0];
   persist(); refreshAll(); fitLoop();
   toast(`Loaded ${pts.length} points in ${loops().length} loop${loops().length === 1 ? '' : 's'}.`);
@@ -389,6 +395,94 @@ async function loadBuiltIn(id, ask = true) {
   catch (e) { alert('Could not load ' + s.name + ': ' + e.message); }
 }
 $('siteLoadBtn').onclick = () => loadBuiltIn($('siteSel').value);
+// When the planner saves a new version of the built-in site in use, pick it up (when there's signal
+// and no count is open). Counts already recorded are untouched: they keep their own point name and position.
+async function refreshBuiltIn() {
+  const id = (S.survey.source || '').replace(/^built-in:/, '');
+  if (!S.survey.source?.startsWith('built-in:') || C || refreshBuiltIn.busy) return;
+  refreshBuiltIn.busy = true;
+  try {
+    await loadSiteList();
+    const s = SITES.find(x => x.id === id); if (!s) return;
+    const r = await fetch(s.file, { cache: 'no-cache' }); if (!r.ok) return;
+    const got = parsePoints(await r.text(), s.file);
+    if (C || !got.pts.length) return;
+    const key = p => `${p.loop}|${p.name}`, pos = p => `${(+p.lat).toFixed(6)},${(+p.lng).toFixed(6)}`;
+    const old = new Map(S.survey.points.map(p => [p.id, p]));
+    const neu = applyMoves(got.pts.map(p => ({ ...p, id: key(p) })));
+    const added = neu.filter(p => !old.has(p.id)).length, removed = S.survey.points.filter(p => !neu.some(n => n.id === p.id)).length;
+    const moved = neu.filter(p => old.has(p.id) && pos(old.get(p.id)) !== pos(p)).length;
+    const photosChanged = JSON.stringify((got.photos || []).map(pos)) !== JSON.stringify((S.survey.photos || []).map(pos));
+    const reordered = !added && !removed && neu.some(p => old.get(p.id).order !== p.order);
+    if (!added && !removed && !moved && !photosChanged && !reordered) return;
+    S.survey.points = neu; S.survey.photos = got.photos || [];
+    if (!loops().includes(S.loop)) S.loop = loops()[0];
+    if (target && !old.has(target.id)) target = null; else if (target) target = neu.find(p => p.id === target.id) || null;
+    persist(); refreshAll();
+    const parts = [added && `${added} added`, moved && `${moved} moved`, removed && `${removed} removed`].filter(Boolean);
+    toast(`${s.name} updated from the planner${parts.length ? ': ' + parts.join(', ') : ''}.`, 6000);
+  } catch (e) { /* no signal: keep what's on the phone */ }
+  finally { refreshBuiltIn.busy = false; }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshBuiltIn(); });
+
+// ---------- moving a point in the field ----------
+// A point you can't reach can be moved to where you are, but only if it has never been counted
+// (and isn't an existing station with past data). Moves are kept apart from the site file, so a new
+// version of the site from the planner doesn't undo them, and they go into backups and GitHub.
+if (!S.moves) S.moves = {};
+function applyMoves(pts) {
+  return pts.map(p => {
+    const m = S.moves[p.id]; if (!m || p.fixed) return p;
+    return { ...p, lat: m.lat, lng: m.lng, moved: true, planned: { lat: p.lat, lng: p.lng } };
+  });
+}
+const everCounted = p => S.counts.some(c => c.pointId === p.id);
+const canMove = p => p && !p.fixed && !everCounted(p);
+function movePointHere(p) {
+  if (!canMove(p)) return false;
+  if (!me) { toast('Waiting for GPS…'); return false; }
+  const planned = p.planned || { lat: p.lat, lng: p.lng };
+  S.moves[p.id] = { lat: +me.lat.toFixed(6), lng: +me.lng.toFixed(6), acc: Math.round(me.acc), planned: { lat: +(+planned.lat).toFixed(6), lng: +(+planned.lng).toFixed(6) }, at: new Date().toISOString(), observer: S.settings.observer, loop: p.loop, point: p.name };
+  Object.assign(p, { lat: S.moves[p.id].lat, lng: S.moves[p.id].lng, moved: true, planned });
+  if (!persist()) return false;
+  if (typeof GH !== 'undefined') { GH.movesDirty = true; ghSave(); }
+  refreshAll(); toast(`${p.name} moved to where you are (±${Math.round(me.acc)} m).`);
+  return true;
+}
+function putPointBack(p) {
+  if (!p.moved || everCounted(p)) return;
+  delete S.moves[p.id];
+  Object.assign(p, { lat: p.planned.lat, lng: p.planned.lng }); delete p.moved; delete p.planned;
+  persist(); if (typeof GH !== 'undefined') { GH.movesDirty = true; ghSave(); }
+  refreshAll(); toast(`${p.name} is back at its planned spot.`);
+}
+// A bottom sheet with big buttons: resolves to the chosen button's value, or null.
+function choose(msg, buttons) {
+  return new Promise(res => {
+    $('sheetMsg').textContent = msg;
+    $('sheetBtns').innerHTML = '';
+    [...buttons, { label: 'Cancel', value: null }].forEach(b => {
+      const el = document.createElement('button'); el.textContent = b.label; if (b.primary) el.className = 'primary';
+      el.onclick = () => { $('sheet').classList.remove('show'); res(b.value); };
+      $('sheetBtns').appendChild(el);
+    });
+    $('sheet').onclick = e => { if (e.target === $('sheet')) { $('sheet').classList.remove('show'); res(null); } };
+    $('sheet').classList.add('show');
+  });
+}
+async function pointMenu(p) {
+  target = p; updateNav();
+  const d = me ? ` You're ${fmtDist(dist(me, p))} away.` : '';
+  const opts = [{ label: `Go to ${p.name}`, value: 'go', primary: true }];
+  if (canMove(p) && me) opts.push({ label: `Move ${p.name} to where I am (±${Math.round(me.acc)} m)`, value: 'move' });
+  if (p.moved && !everCounted(p)) opts.push({ label: `Put ${p.name} back where it was planned`, value: 'back' });
+  const why = p.fixed ? ' Existing station: it stays where it is.' : everCounted(p) ? ' Already counted, so it stays where it is.' : p.moved ? ' Moved in the field.' : '';
+  if (opts.length === 1) return;   // nothing to choose: tapping just makes it the next point
+  const v = await choose(`${p.name} (${p.loop}).${d}${why}`, opts);
+  if (v === 'move') movePointHere(p);
+  if (v === 'back') putPointBack(p);
+}
 
 // ---------- map ----------
 const map = L.map('map', { zoomControl: false }).setView([-41, 174], 5);
@@ -417,7 +511,7 @@ function drawPoints() {
   S.survey.points.forEach(p => {
     const inLoop = p.loop === S.loop, done = countedToday(p);
     const m = L.circleMarker([p.lat, p.lng], { radius: inLoop ? 8 : 5, color: '#fff', weight: 2, fillColor: done ? '#2e9d5b' : inLoop ? '#e0592a' : '#888', fillOpacity: inLoop ? 1 : .7 })
-      .on('click', () => { target = p; updateNav(); })
+      .on('click', () => pointMenu(p))
       .addTo(ptLayer);
     if (inLoop) m.bindTooltip(esc(p.name), { permanent: true, direction: 'right', offset: [7, 0], className: 'pt-label' + (done ? ' done' : '') });
   });
@@ -489,10 +583,17 @@ function checkArrival() {
 }
 $('arrivalStart').onclick = () => { $('arrival').classList.remove('show'); openCount(target); };
 $('arrival').addEventListener('click', e => { if (e.target === $('arrival')) $('arrival').classList.remove('show'); });
-$('countHereBtn').onclick = () => {
+$('countHereBtn').onclick = async () => {
   const n = nextPoint();
   if (!n) return toast('No points left in this loop today.');
-  if (me && dist(me, n) > Math.max(60, (+S.settings.radius || 25) * 2) && !confirm(`You're ${fmtDist(dist(me, n))} from ${n.name}. Count it anyway?`)) return;
+  if (me && dist(me, n) > Math.max(60, (+S.settings.radius || 25) * 2)) {
+    const opts = [];
+    if (canMove(n)) opts.push({ label: `Move ${n.name} here and count`, value: 'move', primary: true });
+    opts.push({ label: `Count ${n.name} without moving it`, value: 'count' });
+    const v = await choose(`You're ${fmtDist(dist(me, n))} from ${n.name}.${canMove(n) ? " If you can't get there, move it to where you are: it stays moved for later visits." : n.fixed ? ' It is an existing station, so it stays where it is.' : ' It has been counted before, so it stays where it is.'}`, opts);
+    if (!v) return;
+    if (v === 'move' && !movePointHere(n)) return;
+  }
   openCount(n);
 };
 
@@ -656,6 +757,7 @@ $('saveCountBtn').onclick = () => {
     date: localDate(start), start: localTime(start), minutes, observer: S.settings.observer,
     gps: C.gps ? { lat: +C.gps.lat.toFixed(6), lng: +C.gps.lng.toFixed(6), acc: Math.round(C.gps.acc) } : null,
     items: C.order.filter(s => C.items[s.name] > 0).map(s => ({ name: s.name, sci: s.sci || '', n: C.items[s.name] })),
+    ...(p.moved ? { planned: { ...p.planned } } : {}),
     app: VERSION,
   });
   if (!persist()) { S.counts.pop(); return; }      // not stored: keep the count open (and its saved copy) rather than lose it
@@ -733,6 +835,9 @@ function renderData() {
       <div class="muted">${GH.token ? 'Waiting for reception to reach GitHub. You can also save a backup file now.' : 'Not in any export or backup yet. Turn on Backup to GitHub in Setup, or save a backup off the phone (Drive, email or Files) at the end of each day.'}</div>
       <div class="row" style="margin-top:8px"><button class="primary" id="backupNowBtn">Back up now</button></div></div>`
       : S.counts.length ? '<div class="card muted">✓ Every count has been exported or backed up at least once.</div>' : ''}
+    ${Object.keys(S.moves || {}).length ? `<div class="card"><h2>Points moved in the field</h2>
+      <div class="muted">${Object.values(S.moves).map(m => `${esc(m.point)} (${esc(m.loop)}): ${Math.round(dist(m, m.planned))} m from planned, ${esc(new Date(m.at).toLocaleDateString())}`).join('<br>')}</div>
+      <div class="row" style="margin-top:8px"><button id="expMoves">Moved points (CSV)</button></div></div>` : ''}
     <div class="card"><h2>Export</h2>
       <div class="muted">${S.counts.length} count${S.counts.length === 1 ? '' : 's'} on this phone. Tick days to export, or leave all ticked.</div>
       <div id="dayPicks" style="margin:8px 0">${days.map(d => `<label style="display:block;padding:4px 0"><input type="checkbox" value="${d}" checked> ${d} · ${byDay[d].length} counts · ${[...new Set(byDay[d].map(c => c.loop))].join(', ')}</label>`).join('') || '<span class="muted">Nothing recorded yet.</span>'}</div>
@@ -759,6 +864,7 @@ $('dataPane').addEventListener('click', e => {
   if (t.id === 'expEbird') exportEbird();
   if (t.id === 'expBackup' || t.id === 'backupNowBtn') backupNow();
   if (t.id === 'restoreBtn') $('restoreFile').click();
+  if (t.id === 'expMoves') saveFile(`${fileStem()}-moved-points-${today()}.csv`, toCsv(movesRows()), 'text/csv');
   if (t.id === 'ghSyncBtn2') syncNow(true);
 });
 $('dataPane').addEventListener('change', async e => {
@@ -885,15 +991,19 @@ async function ghPut(path, text, message) {
   throw new Error('GitHub kept refusing the update.');
 }
 function mineRows(cs) {
-  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id']];
+  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id', 'planned_lat', 'planned_lon']];
   cs.forEach(c => (c.items.length ? c.items : [{ name: '(none recorded)', sci: '', n: 0 }]).forEach(x =>
-    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id])));
+    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id, c.planned ? (+c.planned.lat).toFixed(6) : '', c.planned ? (+c.planned.lng).toFixed(6) : ''])));
   return rows;
+}
+function movesRows() {
+  return [['survey', 'loop', 'point', 'planned_lat', 'planned_lon', 'new_lat', 'new_lon', 'gps_accuracy_m', 'moved_from_planned_m', 'moved_at', 'observer']]
+    .concat(Object.values(S.moves || {}).map(m => [S.survey.name, m.loop, m.point, m.planned.lat, m.planned.lng, m.lat, m.lng, m.acc, Math.round(dist(m, m.planned)), m.at, m.observer || '']));
 }
 async function syncNow(manual = false) {
   if (!GH.token || !GH.repo) { if (manual) toast('Set up Backup to GitHub in Setup first.'); return; }
   if (ghBusy) return;
-  if (!GH.dirty.length && !manual) return;
+  if (!GH.dirty.length && !GH.movesDirty && !manual) return;
   if (manual && !GH.dirty.length) GH.dirty = [...new Set(S.counts.map(c => c.date))];   // "Sync now" re-checks every day
   ghBusy = true; showGhStatus();
   const who = S.settings.observer ? ` (${S.settings.observer})` : '';
@@ -907,6 +1017,10 @@ async function syncNow(manual = false) {
       cs.forEach(c => c.synced = now);
       GH.dirty = GH.dirty.filter(d => d !== date);
       persist(); ghSave();
+    }
+    if (GH.movesDirty || manual) {
+      await ghPut(`points/moved-${GH.phone}.csv`, toCsv(movesRows()), `Points moved in the field${who}`);
+      GH.movesDirty = false; ghSave();
     }
     await ghPut(`backups/${GH.phone}-latest.json`, JSON.stringify({ app: 'bird-count-field', version: VERSION, phone: GH.phone, exported: new Date().toISOString(), ...S }, null, 1) + '\n', `Full backup${who}`);
     GH.last = new Date().toISOString(); GH.error = '';
@@ -922,7 +1036,7 @@ async function syncNow(manual = false) {
 // Uploads whenever reception may have come back, and every minute while something is waiting.
 window.addEventListener('online', () => syncNow());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
-setInterval(() => { if (GH.dirty.length && navigator.onLine !== false) syncNow(); }, 60000);
+setInterval(() => { if ((GH.dirty.length || GH.movesDirty) && navigator.onLine !== false) syncNow(); }, 60000);
 
 $('ghRepo').value = GH.repo; $('ghToken').value = GH.token;
 $('ghSaveBtn').onclick = async () => {
@@ -1033,6 +1147,7 @@ refreshAll(); fitLoop(); startGps(); keepAwake();
 loadSiteList().then(async () => {
   if (!S.survey.points.length && SITES.length) await loadBuiltIn(SITES[0].id, false);
   resumeCurrent();                    // bring back a count that wasn't saved (flat battery, app closed…)
+  refreshBuiltIn();                   // newer version of the site saved from the planner?
 });
 showStorageState();
 // counts saved before the GitHub backup existed (or while it was off) still need uploading
