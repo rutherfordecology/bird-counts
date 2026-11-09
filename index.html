@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bird Count Points</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d2320; --muted: #66706b;
+    --line: #dcdcd4; --accent: #2f6b4f; --accent-ink: #fff; --pt: #e0592a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg);
+         display: grid; grid-template-columns: 320px 1fr; }
+  #panel { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; height: 100vh; }
+  #panel header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 17px; margin: 0; }
+  .ver { color: var(--muted); font-size: 12px; font-weight: normal; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+  .controls { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label { font-size: 13px; }
+  input[type=number] { width: 80px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  .summary { font-size: 13px; color: var(--muted); }
+  #list { overflow: auto; flex: 1; min-height: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--panel); font-weight: 600; }
+  tr:hover td { background: #f1f4f2; cursor: pointer; }
+  #map { height: 100vh; }
+  .pt-label { background: var(--pt); color: #fff; border: 0; border-radius: 9px; padding: 0 5px; font-weight: 700; font-size: 11px; box-shadow: none; }
+  .pt-label::before { display: none; }
+  .pt-label.pt-added { background: #0f8b8d; }
+  .pt-label.pt-close { box-shadow: 0 0 0 2px #ffb000; }
+  tr.close td.gap { color: #b36b00; font-weight: 700; }
+  td.act { padding: 0 4px; }
+  td.act button { padding: 0 6px; line-height: 18px; font-size: 13px; color: var(--muted); }
+  td.act button:hover { color: #b3261e; border-color: #b3261e; }
+  .tag-added { color: #0f8b8d; font-weight: 600; }
+  .leaflet-popup-content button { margin-top: 6px; padding: 3px 8px; font-size: 12.5px; }
+  body.adding #map, body.adding #map .leaflet-interactive { cursor: crosshair; }
+  button.on { background: #0f8b8d; color: #fff; border-color: #0f8b8d; }
+  .ex-label { border: 0; border-radius: 9px; padding: 0 5px; font-weight: 700; font-size: 10.5px; box-shadow: none; color: #fff; }
+  .ex-label::before { display: none; }
+  .ex-station { background: #2364c9; }
+  .ex-ppt { background: #b02fb8; }
+  .zoomed-out .ex-label { visibility: hidden; }  /* not display:none, so Leaflet can still measure labels to place them */
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #999; vertical-align: -1px; margin-right: 3px; }
+  .swatch.sq { border-radius: 2px; }
+  .empty { padding: 16px; color: var(--muted); }
+  #printSheet { display: none; }
+  #dropOverlay { display: none; position: fixed; inset: 0; z-index: 2000; background: rgba(47,107,79,.18); border: 4px dashed var(--accent); pointer-events: none; }
+  #dropOverlay div { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #fff; color: var(--ink); padding: 18px 28px; border-radius: 10px; font-size: 18px; font-weight: 600; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,.2); }
+  #dropOverlay small { font-weight: normal; color: var(--muted); font-size: 13px; }
+  body.dragging #dropOverlay { display: block; }
+
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
+    #map { height: 55vh; grid-row: 1; }
+    #panel { grid-row: 2; height: auto; border-right: 0; border-top: 1px solid var(--line); }
+    #list { max-height: none; }
+  }
+
+  @media print {
+    body { display: block; background: #fff; }
+    #panel, .leaflet-control-container { display: none !important; }
+    #map { height: 120mm; width: 100%; border: 1px solid #999; }
+    #printSheet { display: block; margin-top: 6mm; }
+    #printSheet h2 { font-size: 15px; margin: 0 0 4px; }
+    #printSheet table { font-size: 11px; }
+    #printSheet td, #printSheet th { border: 1px solid #999; padding: 4px 6px; }
+    #printSheet td.blank { width: 22%; }
+    #printSheet tr { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<aside id="panel">
+  <header>
+    <h1>Bird Count Points <span class="ver">v0.6.0</span></h1>
+    <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
+  </header>
+  <div class="controls">
+    <div class="row">
+      <input type="text" id="siteName" placeholder="Site name" style="flex:1;min-width:0;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit">
+      <button id="saveBtn">Save</button>
+    </div>
+    <div class="row">
+      <select id="siteList" style="flex:1;min-width:0;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit"></select>
+      <button id="deleteSiteBtn" title="Delete the selected saved site from this browser">Delete</button>
+    </div>
+    <div class="row">
+      <button id="saveFileBtn">Save to file</button>
+      <button id="openFileBtn" title="Open a site saved from here, or add paths and existing points from a spreadsheet, KML/KMZ, GPX or GeoJSON">Import file…</button>
+      <input type="file" id="fileInput" accept=".geojson,.json,.gpx,.kml,.kmz,.xlsx,.xls,.csv" multiple hidden>
+    </div>
+    <div class="summary" id="saveStatus"></div>
+    <div class="summary" id="importStatus">Or drag files onto the page: xlsx, csv, KML, KMZ, GPX or GeoJSON.</div>
+  </div>
+  <div class="controls">
+    <div class="row" style="justify-content:space-between">
+      <div class="summary" id="existingSummary" style="flex:1"></div>
+      <button id="removeExistingBtn" title="Remove the existing stations and photopoints from this site">Remove</button>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="row">
+      <button class="primary" id="drawBtn">Draw path</button>
+      <button id="clearBtn">New</button>
+    </div>
+    <div class="row">
+      <label for="spacing">Spacing</label>
+      <input type="number" id="spacing" value="200" min="10" step="10"> <span>m apart, straight line</span>
+    </div>
+    <div class="row">
+      <label for="prefix">Name prefix</label>
+      <input type="text" id="prefix" value="P" style="width:60px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit">
+    </div>
+    <div class="row">
+      <button id="addPtBtn" disabled title="Click on the map to add a point of your own, e.g. at a wetland. It may be closer than the spacing; points further along the path re-space from it.">Add point</button>
+      <button id="restoreBtn" disabled title="Bring back the points you deleted">Restore deleted</button>
+    </div>
+    <div class="summary" id="editHint">Added points can sit closer than the spacing. Points further along the path re-space from them. Click a point to delete it if it's too close.</div>
+    <div class="summary" id="summary">No path yet.</div>
+    <div class="row">
+      <button id="gpxBtn" disabled>GPX</button>
+      <button id="kmlBtn" disabled>KML</button>
+      <button id="csvBtn" disabled>CSV</button>
+      <button id="printBtn" disabled>Print sheet</button>
+    </div>
+  </div>
+  <div id="list"><div class="empty">Click <b>Draw path</b>, click along your route, then click the last point again (or <b>Finish</b>) to end it. Drag vertices with <b>Edit</b> on the map toolbar to adjust.</div></div>
+</aside>
+<div id="map"></div>
+<section id="printSheet"></section>
+<div id="dropOverlay"><div>Drop to import<br><small>xlsx · csv · KML · KMZ · GPX · GeoJSON</small></div></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const VERSION = '0.6.0';
+proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
+
+// ---------- map ----------
+const map = L.map('map', { zoomControl: true }).setView([-41.2, 174.5], 6);
+const bases = {
+  'Aerial': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri' }),
+  'Topo': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenTopoMap, © OpenStreetMap contributors' }),
+  'Streets': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }),
+};
+bases['Aerial'].addTo(map);
+const exStationLayer = L.layerGroup().addTo(map);
+const exPptLayer = L.layerGroup().addTo(map);
+L.control.layers(bases, {
+  '<span class="swatch sq" style="background:#2364c9"></span>Existing stations': exStationLayer,
+  '<span class="swatch" style="background:#b02fb8"></span>Photopoints': exPptLayer,
+}, { position: 'topright' }).addTo(map);
+const syncLabelZoom = () => map.getContainer().classList.toggle('zoomed-out', map.getZoom() < 15);
+map.on('zoomend', syncLabelZoom); syncLabelZoom();
+L.control.scale({ imperial: false }).addTo(map);
+
+const paths = new L.FeatureGroup().addTo(map);
+const pointLayer = L.layerGroup().addTo(map);
+const lineStyle = { color: '#ffd23f', weight: 3, opacity: 0.95 };
+
+const drawControl = new L.Control.Draw({
+  position: 'topleft',
+  draw: { polyline: { shapeOptions: lineStyle, metric: true, showLength: true }, polygon: false, rectangle: false, circle: false, marker: false, circlemarker: false },
+  edit: { featureGroup: paths, remove: true },
+});
+map.addControl(drawControl);
+const polyDrawer = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
+
+// ---------- geometry ----------
+const R = 6371008.8, rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+function dist(a, b) {
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+// point at fraction f along the great circle a->b
+function slerp(a, b, f) {
+  const d = dist(a, b) / R;
+  if (d < 1e-12) return { lat: a.lat, lng: a.lng };
+  const A = Math.sin((1 - f) * d) / Math.sin(d), B = Math.sin(f * d) / Math.sin(d);
+  const [p1, l1, p2, l2] = [rad(a.lat), rad(a.lng), rad(b.lat), rad(b.lng)];
+  const x = A * Math.cos(p1) * Math.cos(l1) + B * Math.cos(p2) * Math.cos(l2);
+  const y = A * Math.cos(p1) * Math.sin(l1) + B * Math.cos(p2) * Math.sin(l2);
+  const z = A * Math.sin(p1) + B * Math.sin(p2);
+  return { lat: deg(Math.atan2(z, Math.hypot(x, y))), lng: deg(Math.atan2(y, x)) };
+}
+// Nearest spot on a path to p: distance from the path and distance along it (local flat approximation, fine at this scale).
+function projectOnto(latlngs, p) {
+  let best = { d: Infinity, along: 0 }, along = 0;
+  for (let i = 0; i < latlngs.length - 1; i++) {
+    const a = latlngs[i], b = latlngs[i + 1], seg = dist(a, b), k = Math.cos(rad(a.lat)) * R * Math.PI / 180, m = R * Math.PI / 180;
+    const bx = (b.lng - a.lng) * k, by = (b.lat - a.lat) * m, px = (p.lng - a.lng) * k, py = (p.lat - a.lat) * m;
+    const L2 = bx * bx + by * by, t = L2 ? Math.max(0, Math.min(1, (px * bx + py * by) / L2)) : 0;
+    const d = Math.hypot(px - t * bx, py - t * by);
+    if (d < best.d) best = { d, along: along + t * seg };
+    along += seg;
+  }
+  return best;
+}
+
+// Walk the path from its start. A station goes at the first spot that is at least `spacing`
+// metres in a straight line from every station already placed (including those on earlier
+// paths), so stations are never closer than `spacing` even where the path curves or doubles back.
+// Points the user added (`manual`, each with its `along` on this path) are placed when the walk
+// reaches them, wherever they are; later points then keep `spacing` from them too. A generated
+// point near a deleted spot is left out but still holds its place, so it doesn't just reappear a
+// few metres on.
+const STEP = 2; // metres between samples along the path
+function stationsAlong(latlngs, spacing, placed, manual = [], deleted = [], used = new Set()) {
+  const out = [];
+  let length = 0;
+  for (let i = 0; i < latlngs.length - 1; i++) length += dist(latlngs[i], latlngs[i + 1]);
+  if (latlngs.length < 2) return { stations: out, length };
+  const all = placed;   // shared across paths: placed points plus deleted spots
+  const nearest = p => all.reduce((m, s) => Math.min(m, dist(p, s)), Infinity);
+  const tol = spacing / 4;
+  const man = manual.slice().sort((x, y) => x.along - y.along);
+  let mi = 0, along = 0;
+  const placeManual = upTo => {   // returns the along of the last one placed, or -1
+    let last = -1;
+    while (mi < man.length && man[mi].along <= upTo) {
+      const m = man[mi++];
+      out.push({ lat: m.lat, lng: m.lng, along: m.along, added: true, id: m.id, off: m.off });
+      all.push(m); last = m.along;
+    }
+    return last;
+  };
+  for (let i = 0; i < latlngs.length - 1; i++) {
+    const a = latlngs[i], b = latlngs[i + 1], seg = dist(a, b);
+    const n = Math.max(1, Math.ceil(seg / STEP));
+    let prevF = 0;
+    for (let k = (i === 0 ? 0 : 1); k <= n; k++) {
+      const f = k / n;
+      const mAlong = placeManual(along + f * seg);
+      if (mAlong >= 0 && seg > 0) prevF = Math.max(prevF, Math.min(f, (mAlong - along) / seg));
+      if (nearest(slerp(a, b, f)) >= spacing) {
+        // refine between the last too-close sample and this one, so the gap is spacing rather than up to spacing + STEP
+        let lo = prevF, hi = f;
+        if (k > 0) for (let j = 0; j < 30; j++) { const mid = (lo + hi) / 2; nearest(slerp(a, b, mid)) >= spacing ? hi = mid : lo = mid; }
+        const st = { ...slerp(a, b, hi), along: along + hi * seg };
+        const di = deleted.findIndex((d, j) => !used.has(j) && dist(d, st) < tol);
+        if (di >= 0) used.add(di); else out.push(st);
+        all.push(st);
+      }
+      prevF = f;
+    }
+    along += seg;
+  }
+  placeManual(Infinity);
+  return { stations: out, length };
+}
+
+// ---------- state ----------
+let stations = [];   // flattened across all paths
+let manual = [];     // points the user added: [{ id, lat, lng }]
+let deleted = [];    // spots where the user deleted a generated point: [{ lat, lng }]
+let nextId = 1;
+const $ = id => document.getElementById(id);
+
+// Recalculate points from the paths (after any edit), then draw them.
+function rebuild(opts = {}) {
+  const spacing = Math.max(10, +$('spacing').value || 200);
+  const prefix = $('prefix').value.trim();
+  stations = [];
+  const layers = paths.getLayers();
+  // each added point belongs to the path it is nearest to
+  const byPath = layers.map(() => []);
+  manual.forEach(m => {
+    let best = null;
+    layers.forEach((l, i) => { const pr = projectOnto(l.getLatLngs(), m); if (!best || pr.d < best.d) best = { ...pr, i }; });
+    if (best) byPath[best.i].push({ ...m, along: best.along, off: best.d });
+  });
+  const placed = [], used = new Set();
+  layers.forEach((layer, i) => {
+    const { stations: s } = stationsAlong(layer.getLatLngs(), spacing, placed, byPath[i], deleted, used);
+    s.forEach(p => stations.push({ ...p, path: i + 1 }));
+  });
+  stations.forEach((p, i) => p.name = prefix + String(i + 1).padStart(stations.length >= 100 ? 3 : 2, '0'));
+  renderStations();
+  if (!opts.silent) markChanged();
+}
+
+// Draw whatever is in `stations` (freshly calculated, or exactly as saved).
+function renderStations() {
+  const spacing = Math.max(10, +$('spacing').value || 200);
+  pointLayer.clearLayers();
+  let totalLen = 0;
+  paths.eachLayer(l => { const ll = l.getLatLngs(); for (let i = 0; i < ll.length - 1; i++) totalLen += dist(ll[i], ll[i + 1]); });
+  stations.forEach((p, i) => {
+    const prev = stations[i - 1];
+    p.gap = prev && prev.path === p.path ? dist(prev, p) : null;
+    p.nearest = Math.min(...stations.filter(o => o !== p).map(o => dist(o, p)));
+    const [e, n] = proj4('EPSG:4326', 'EPSG:2193', [p.lng, p.lat]);
+    p.e = Math.round(e); p.n = Math.round(n);
+    p.close = p.nearest < spacing - 0.5;
+    const ring = p.close ? '#ffb000' : '#fff';
+    const popup = `<b>${p.name}</b>${p.added ? ' <span class="tag-added">added</span>' : ''}<br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}<br>NZTM ${p.e} E ${p.n} N<br>${p.gap != null ? `${Math.round(p.gap)} m straight line from previous point<br>` : ''}${isFinite(p.nearest) ? `Nearest other point ${Math.round(p.nearest)} m${p.close ? ` <b style="color:#b36b00">(under ${spacing} m)</b>` : ''}<br>` : ''}${Math.round(p.along)} m along path ${p.path}${p.added && p.off >= 5 ? ` (${Math.round(p.off)} m off it)` : ''}${p.added ? '<br><i>Drag to move.</i>' : ''}<br><button data-del="${i}">${p.added ? 'Remove added point' : 'Delete point'}</button>`;
+    const tip = { permanent: true, direction: 'right', offset: [6, 0], className: 'pt-label' + (p.added ? ' pt-added' : '') + (p.close ? ' pt-close' : '') };
+    if (p.added) {
+      p.marker = L.marker([p.lat, p.lng], { draggable: true, keyboard: false, icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7], tooltipAnchor: [1, 0],
+        html: `<div style="width:14px;height:14px;background:#0f8b8d;border:2px solid ${ring};border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.35);box-sizing:border-box"></div>` }) });
+      p.marker.on('dragend', ev => { const m = manual.find(x => x.id === p.id); if (!m) return; const ll = ev.target.getLatLng(); m.lat = +ll.lat.toFixed(7); m.lng = +ll.lng.toFixed(7); rebuild(); });
+    } else {
+      p.marker = L.circleMarker([p.lat, p.lng], { radius: 6, color: ring, weight: p.close ? 3 : 2, fillColor: '#e0592a', fillOpacity: 1 });
+    }
+    p.marker.bindTooltip(p.name, tip).bindPopup(popup).addTo(pointLayer);
+  });
+  renderList(totalLen, paths.getLayers().length, spacing);
+}
+
+// Delete a generated point (its spot is remembered, so later points stay spaced from it
+// unless a point you added is nearby), or remove a point you added.
+function deletePoint(i) {
+  const p = stations[i];
+  if (!p) return;
+  map.closePopup();
+  if (p.added) manual = manual.filter(m => m.id !== p.id);
+  else deleted.push({ lat: +p.lat.toFixed(7), lng: +p.lng.toFixed(7) });
+  rebuild();
+}
+map.on('popupopen', e => {
+  const b = e.popup.getElement()?.querySelector('button[data-del]');
+  if (b) b.onclick = () => deletePoint(+b.dataset.del);
+});
+
+function renderList(totalLen, pathCount, spacing) {
+  const has = stations.length > 0;
+  ['gpxBtn', 'kmlBtn', 'csvBtn', 'printBtn'].forEach(id => $(id).disabled = !has);
+  $('addPtBtn').disabled = !pathCount;
+  if (!pathCount && adding) setAdding(false);
+  $('restoreBtn').disabled = !deleted.length;
+  $('restoreBtn').textContent = deleted.length ? `Restore deleted (${deleted.length})` : 'Restore deleted';
+  if (!pathCount) {
+    $('summary').textContent = 'No path yet.';
+    $('list').innerHTML = '<div class="empty">Click <b>Draw path</b>, click along your route, then click the last point again (or <b>Finish</b>) to end it. Drag vertices with the edit tool on the map to adjust.</div>';
+    return;
+  }
+  const km = totalLen >= 1000 ? (totalLen / 1000).toFixed(2) + ' km' : Math.round(totalLen) + ' m';
+  const nAdded = stations.filter(p => p.added).length, nClose = stations.filter(p => p.close).length;
+  $('summary').innerHTML = `${stations.length} points${nAdded ? ` (${nAdded} added)` : ''} · ${km} of path${pathCount > 1 ? ` across ${pathCount} paths` : ''} · ${nClose
+    ? `<b style="color:#b36b00">${nClose} point${nClose === 1 ? ' is' : 's are'} under ${spacing} m from another</b> (amber ring)`
+    : `every point at least ${spacing} m (straight line) from every other`}${deleted.length ? ` · ${deleted.length} deleted` : ''}`;
+  const multi = pathCount > 1;
+  $('list').innerHTML = `<table><thead><tr><th>Point</th>${multi ? '<th>Path</th>' : ''}<th title="Straight-line distance from the previous point">Gap (m)</th><th>NZTM E</th><th>NZTM N</th><th></th></tr></thead><tbody>${
+    stations.map((p, i) => `<tr data-i="${i}"${p.close ? ' class="close"' : ''}><td>${p.name}${p.added ? ' <span class="tag-added" title="Added by you">+</span>' : ''}</td>${multi ? `<td>${p.path}</td>` : ''}<td class="gap">${p.gap != null ? Math.round(p.gap) : '–'}</td><td>${p.e}</td><td>${p.n}</td><td class="act"><button data-del="${i}" title="${p.added ? 'Remove this added point' : 'Delete this point'}">×</button></td></tr>`).join('')
+  }</tbody></table>`;
+}
+
+$('list').addEventListener('click', e => {
+  const del = e.target.closest('button[data-del]');
+  if (del) { deletePoint(+del.dataset.del); return; }
+  const tr = e.target.closest('tr[data-i]');
+  if (!tr) return;
+  const p = stations[+tr.dataset.i];
+  map.setView([p.lat, p.lng], Math.max(map.getZoom(), 16));
+  p.marker.openPopup();
+});
+
+// ---------- drawing events ----------
+$('drawBtn').onclick = () => { setAdding(false); polyDrawer.enable(); };
+$('clearBtn').onclick = () => {
+  if (dirty && hasContent() && !confirm('Start a new site? Unsaved changes to the current one will be lost.')) return;
+  paths.clearLayers(); existing = []; manual = []; deleted = []; renderExisting(); current = null; $('siteName').value = ''; rebuild(); dirty = false; refreshSiteUI();
+};
+
+// ---------- adding and restoring points ----------
+let adding = false;
+function setAdding(on) {
+  adding = on;
+  document.body.classList.toggle('adding', on);
+  $('addPtBtn').classList.toggle('on', on);
+  $('addPtBtn').textContent = on ? 'Done adding' : 'Add point';
+  $('editHint').innerHTML = on
+    ? '<b>Click on the map to add a point.</b> Add as many as you need, then press <b>Done adding</b> (or Esc).'
+    : "Added points can sit closer than the spacing. Points further along the path re-space from them. Click a point to delete it if it's too close.";
+}
+$('addPtBtn').onclick = () => { if (!adding) polyDrawer.disable(); setAdding(!adding); };
+map.on('click', e => {
+  if (!adding) return;
+  manual.push({ id: nextId++, lat: +e.latlng.lat.toFixed(7), lng: +e.latlng.lng.toFixed(7) });
+  rebuild();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && adding) setAdding(false); });
+map.on('draw:drawstart draw:editstart', () => setAdding(false));
+$('restoreBtn').onclick = () => { if (!deleted.length) return; deleted = []; rebuild(); };
+map.on(L.Draw.Event.CREATED, e => { e.layer.setStyle(lineStyle); paths.addLayer(e.layer); rebuild(); });
+map.on(L.Draw.Event.EDITED + ' ' + L.Draw.Event.DELETED, rebuild);
+map.on('draw:editvertex draw:editmove', rebuild);
+['spacing', 'prefix'].forEach(id => $(id).addEventListener('input', rebuild));
+$('siteName').addEventListener('input', () => saveDraft());
+
+// ---------- exports ----------
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const localDate = d => { d = new Date(d); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const stamp = () => localDate(Date.now());
+function pathCoords() { return paths.getLayers().map(l => l.getLatLngs()); }
+
+$('gpxBtn').onclick = () => {
+  const wpts = stations.map(p => `  <wpt lat="${p.lat.toFixed(7)}" lon="${p.lng.toFixed(7)}"><name>${esc(p.name)}</name><desc>${Math.round(p.along)} m along path ${p.path}${p.added ? ' (added)' : ''}</desc><sym>Flag, Blue</sym></wpt>`).join('\n');
+  const trks = pathCoords().map((ll, i) => `  <trk><name>Path ${i + 1}</name><trkseg>${ll.map(c => `<trkpt lat="${c.lat.toFixed(7)}" lon="${c.lng.toFixed(7)}"/>`).join('')}</trkseg></trk>`).join('\n');
+  download(`bird-count-points-${stamp()}.gpx`, `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Bird Count Points ${VERSION}" xmlns="http://www.topografix.com/GPX/1/1">\n${wpts}\n${trks}\n</gpx>\n`, 'application/gpx+xml');
+};
+$('kmlBtn').onclick = () => {
+  const pms = stations.map(p => `<Placemark><name>${esc(p.name)}</name><description>${Math.round(p.along)} m along path ${p.path}${p.added ? ' (added)' : ''}; NZTM ${p.e} E ${p.n} N</description><Point><coordinates>${p.lng.toFixed(7)},${p.lat.toFixed(7)}</coordinates></Point></Placemark>`).join('\n');
+  const lines = pathCoords().map((ll, i) => `<Placemark><name>Path ${i + 1}</name><Style><LineStyle><color>ff3fd2ff</color><width>3</width></LineStyle></Style><LineString><coordinates>${ll.map(c => `${c.lng.toFixed(7)},${c.lat.toFixed(7)}`).join(' ')}</coordinates></LineString></Placemark>`).join('\n');
+  download(`bird-count-points-${stamp()}.kml`, `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Bird count points</name>\n${lines}\n${pms}\n</Document></kml>\n`, 'application/vnd.google-earth.kml+xml');
+};
+$('csvBtn').onclick = () => {
+  const rows = [['point', 'path', 'along_m', 'lat', 'lon', 'nztm_e', 'nztm_n', 'added']]
+    .concat(stations.map(p => [p.name, p.path, Math.round(p.along), p.lat.toFixed(7), p.lng.toFixed(7), p.e, p.n, p.added ? 'Y' : '']));
+  download(`bird-count-points-${stamp()}.csv`, rows.map(r => r.join(',')).join('\r\n') + '\r\n', 'text/csv');
+};
+$('printBtn').onclick = () => {
+  map.fitBounds(paths.getBounds(), { padding: [30, 30] });
+  $('printSheet').innerHTML = `<h2>Bird count points · ${stations.length} points, ${$('spacing').value} m spacing</h2>
+    <table><thead><tr><th>Point</th><th>NZTM E</th><th>NZTM N</th><th>Lat, lon</th><th>Date / time</th><th>Weather</th><th>Notes</th></tr></thead><tbody>${
+      stations.map(p => `<tr><td><b>${p.name}</b>${p.added ? ' (added)' : ''}</td><td>${p.e}</td><td>${p.n}</td><td>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>`).join('')
+    }</tbody></table>`;
+  setTimeout(() => window.print(), 600);
+};
+
+// ---------- saving ----------
+// A site = paths + the points exactly as placed + settings. Kept by name in this browser,
+// and as a GeoJSON file (the durable copy; also opens in QGIS).
+const DRAFT_KEY = 'birdcounts.v1';      // work in progress, restored on reload
+const SITES_KEY = 'birdcounts.sites';   // { name: site }
+let current = null;                     // name of the saved site being worked on
+let dirty = false;
+
+function snapshot() {
+  return {
+    name: $('siteName').value.trim() || current || '',
+    spacing: +$('spacing').value || 200,
+    prefix: $('prefix').value,
+    paths: pathCoords().map(ll => ll.map(c => [+c.lat.toFixed(7), +c.lng.toFixed(7)])),
+    points: stations.map(p => ({ name: p.name, path: p.path, along: Math.round(p.along * 10) / 10, lat: +p.lat.toFixed(7), lng: +p.lng.toFixed(7), ...(p.added ? { added: true, id: p.id, off: Math.round(p.off || 0) } : {}) })),
+    manual: manual.map(m => ({ ...m })),
+    deleted: deleted.map(d => ({ ...d })),
+    existing: existing.map(p => ({ ...p })),
+    savedAt: new Date().toISOString(),
+    version: VERSION,
+  };
+}
+// Show a site with its points exactly as saved (they are only recalculated after an edit).
+function loadSite(s) {
+  paths.clearLayers();
+  $('spacing').value = s.spacing || 200;
+  $('prefix').value = s.prefix != null ? s.prefix : 'P';
+  $('siteName').value = s.name || '';
+  existing = (s.existing || []).map(p => ({ ...p }));
+  manual = s.manual ? s.manual.map(m => ({ ...m }))
+    : (s.points || []).filter(p => p.added).map((p, i) => ({ id: p.id ?? i + 1, lat: p.lat, lng: p.lng }));
+  (s.points || []).forEach(p => { if (p.added && p.id == null) p.id = manual.find(m => m.lat === p.lat && m.lng === p.lng)?.id; });
+  deleted = (s.deleted || []).map(d => ({ ...d }));
+  nextId = manual.reduce((m, x) => Math.max(m, +x.id || 0), 0) + 1;
+  renderExisting();
+  (s.paths || []).forEach(ll => { if (ll.length > 1) paths.addLayer(L.polyline(ll, lineStyle)); });
+  if (s.points && s.points.length) {
+    stations = s.points.map(p => ({ ...p }));
+    renderStations();
+  } else rebuild({ silent: true });   // don't mark as changed or overwrite the draft while loading
+  const b = L.featureGroup([...paths.getLayers(), ...pointLayer.getLayers(), ...exStationLayer.getLayers(), ...exPptLayer.getLayers()]);
+  if (b.getLayers().length) map.fitBounds(b.getBounds(), { padding: [40, 40], maxZoom: 17 });
+}
+function readSites() { try { return JSON.parse(localStorage.getItem(SITES_KEY)) || {}; } catch (e) { return {}; } }
+function writeSites(sites) { try { localStorage.setItem(SITES_KEY, JSON.stringify(sites)); return true; } catch (e) { alert('Could not save in this browser: ' + e.message + '\nUse "Save to file" instead.'); return false; } }
+function saveDraft() { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...snapshot(), current, dirty })); } catch (e) {} }
+const hasContent = () => paths.getLayers().length > 0 || existing.length > 0;
+function markChanged() { dirty = true; refreshSiteUI(); saveDraft(); }
+
+function refreshSiteUI() {
+  const sites = readSites(), names = Object.keys(sites).sort((a, b) => a.localeCompare(b));
+  $('siteList').innerHTML = `<option value="">${names.length ? 'Open a saved site…' : 'No saved sites yet'}</option>` +
+    names.map(n => `<option value="${esc(n)}"${n === current ? ' selected' : ''}>${esc(n)} · ${[sites[n].points.length ? sites[n].points.length + ' new' : '', (sites[n].existing || []).length ? sites[n].existing.length + ' existing' : ''].filter(Boolean).join(', ') || 'empty'} · ${localDate(sites[n].savedAt)}</option>`).join('');
+  $('deleteSiteBtn').disabled = !current;
+  $('saveFileBtn').disabled = !hasContent();
+  $('saveStatus').textContent = current
+    ? `Working on “${current}”${dirty ? ' · unsaved changes' : ' · saved'}`
+    : (hasContent() ? 'Not saved yet. Give it a name and press Save.' : '');
+}
+
+$('saveBtn').onclick = () => {
+  const name = $('siteName').value.trim();
+  if (!name) { $('siteName').focus(); $('saveStatus').textContent = 'Type a site name first.'; return; }
+  if (!hasContent()) { $('saveStatus').textContent = 'Draw a path or add existing points first.'; return; }
+  const sites = readSites();
+  if (sites[name] && name !== current && !confirm(`A saved site called “${name}” already exists. Replace it?`)) return;
+  sites[name] = snapshot();
+  if (!writeSites(sites)) return;
+  current = name; dirty = false; refreshSiteUI(); saveDraft();
+};
+$('siteList').onchange = () => {
+  const name = $('siteList').value;
+  if (!name) return;
+  if (dirty && hasContent() && !confirm('Open another site? Unsaved changes to the current one will be lost.')) { refreshSiteUI(); return; }
+  loadSite(readSites()[name]);
+  current = name; dirty = false; refreshSiteUI(); saveDraft();
+};
+$('deleteSiteBtn').onclick = () => {
+  if (!current || !confirm(`Delete the saved site “${current}” from this browser? This can't be undone (a file you saved is not affected).`)) return;
+  const sites = readSites(); delete sites[current]; writeSites(sites);
+  current = null; dirty = true; refreshSiteUI(); saveDraft();
+};
+
+// --- files: GeoJSON is our own format; GPX and KML tracks/waypoints can also be opened ---
+$('saveFileBtn').onclick = () => {
+  const s = snapshot();
+  const fc = {
+    type: 'FeatureCollection',
+    birdCounts: { name: s.name, spacing: s.spacing, prefix: s.prefix, savedAt: s.savedAt, version: VERSION, deleted: s.deleted },
+    features: [
+      ...s.paths.map((ll, i) => ({ type: 'Feature', properties: { kind: 'path', path: i + 1 }, geometry: { type: 'LineString', coordinates: ll.map(([la, ln]) => [ln, la]) } })),
+      ...s.points.map(p => ({ type: 'Feature', properties: { kind: 'point', name: p.name, path: p.path, along_m: p.along, added: !!p.added, nztm_e: stations.find(x => x.name === p.name)?.e, nztm_n: stations.find(x => x.name === p.name)?.n }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })),
+      ...s.existing.map(p => ({ type: 'Feature', properties: { kind: p.kind === 'photopoint' ? 'existing-photopoint' : 'existing-station', line: p.line, number: p.num, nztm_e: p.e, nztm_n: p.n }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })),
+    ],
+  };
+  const fname = (s.name || 'bird-count-site').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'bird-count-site';
+  download(`${fname}.geojson`, JSON.stringify(fc, null, 1), 'application/geo+json');
+};
+// ---------- existing stations and photopoints (read from a spreadsheet) ----------
+let existing = [];   // [{ kind: 'station'|'photopoint', line, num, lat, lng, e, n }]
+const EX = {
+  station: { color: '#2364c9', cls: 'ex-station', round: false, layer: exStationLayer, label: 'Existing station' },
+  photopoint: { color: '#b02fb8', cls: 'ex-ppt', round: true, layer: exPptLayer, label: 'Photopoint' },
+};
+function exIcon(kind) {
+  const k = EX[kind], s = kind === 'photopoint' ? 12 : 11;
+  return L.divIcon({ className: '', iconSize: [s, s], iconAnchor: [s / 2, s / 2], tooltipAnchor: [-s / 2, 0],
+    html: `<div style="width:${s}px;height:${s}px;background:${k.color};border:2px solid #fff;border-radius:${k.round ? '50%' : '2px'};box-shadow:0 0 0 1px rgba(0,0,0,.35);box-sizing:border-box"></div>` });
+}
+function renderExisting() {
+  exStationLayer.clearLayers(); exPptLayer.clearLayers();
+  // several photos are often taken from one spot: one marker per spot
+  const groups = new Map();
+  existing.forEach(p => {
+    const key = p.kind + '|' + p.lat.toFixed(6) + '|' + p.lng.toFixed(6);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  });
+  groups.forEach(g => {
+    const p = g[0], k = EX[p.kind];
+    const byLine = {};
+    g.forEach(x => (byLine[x.line ?? ''] = byLine[x.line ?? ''] || []).push(x.num));
+    const label = Object.entries(byLine).map(([ln, nums]) => (ln !== '' ? (p.kind === 'station' ? ln + '-' : ln + ' ') : '') + nums.join(',')).join(' · ');
+    L.marker([p.lat, p.lng], { icon: exIcon(p.kind), keyboard: false })
+      .bindTooltip(esc(label), { permanent: true, direction: 'left', offset: [-3, 0], className: 'ex-label ' + k.cls })
+      .bindPopup(`<b>${k.label}${g.length > 1 ? 's' : ''}</b><br>${g.map(x => `${x.line != null && x.line !== '' ? 'Line ' + esc(x.line) + ', ' : ''}no. ${esc(x.num)}`).join('<br>')}<br>NZTM ${p.e} E ${p.n} N<br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`)
+      .addTo(k.layer);
+  });
+  const ns = existing.filter(p => p.kind === 'station').length, pp = existing.filter(p => p.kind === 'photopoint');
+  const ppSpots = new Set(pp.map(p => p.lat.toFixed(6) + p.lng.toFixed(6))).size;
+  $('existingSummary').innerHTML = existing.length
+    ? `<span class="swatch sq" style="background:#2364c9"></span>${ns} existing station${ns === 1 ? '' : 's'} &nbsp; <span class="swatch" style="background:#b02fb8"></span>${pp.length} photopoint${pp.length === 1 ? '' : 's'}${ppSpots !== pp.length ? ` at ${ppSpots} spots` : ''}`
+    : 'No existing stations or photopoints. Import a spreadsheet, KML/KMZ or GPX to add them.';
+  $('removeExistingBtn').disabled = !existing.length;
+}
+
+// Find the columns in a sheet by their headers. NZTM easting/northing or lat/lon.
+function readSheetRows(rows, kindDefault) {
+  const hdrIdx = rows.findIndex(r => r && r.some(c => /east|^lat|latitude/i.test(String(c ?? ''))));
+  if (hdrIdx < 0) return [];
+  const h = rows[hdrIdx].map(c => String(c ?? '').replace(/\s+/g, ' ').trim());
+  const col = (re, not) => h.findIndex((t, i) => re.test(t) && !(not && not.test(t)));
+  const cE = col(/east/i), cN = col(/north/i), cLat = col(/^lat|latitude/i), cLon = col(/^lon|^lng|longitude/i);
+  const cLine = col(/line/i);
+  let cNum = h.findIndex((t, i) => i !== cLine && /number|^no\.?$|^id$|^name$/i.test(t) && !/east|north|grid/i.test(t));
+  if (cNum < 0) cNum = h.findIndex((t, i) => i !== cLine && /station|point|ppt|photo/i.test(t) && !/east|north|grid|lat|lon/i.test(t));
+  const cKind = col(/type|kind/i);
+  const out = [];
+  for (const r of rows.slice(hdrIdx + 1)) {
+    if (!r) continue;
+    let lat, lng, e, n;
+    if (cE >= 0 && cN >= 0 && isFinite(parseFloat(r[cE])) && isFinite(parseFloat(r[cN]))) {
+      e = parseFloat(r[cE]); n = parseFloat(r[cN]);
+      [lng, lat] = proj4('EPSG:2193', 'EPSG:4326', [e, n]);
+    } else if (cLat >= 0 && cLon >= 0 && isFinite(parseFloat(r[cLat])) && isFinite(parseFloat(r[cLon]))) {
+      lat = parseFloat(r[cLat]); lng = parseFloat(r[cLon]);
+      [e, n] = proj4('EPSG:4326', 'EPSG:2193', [lng, lat]);
+    } else continue;
+    if (!(lat < -25 && lat > -56 && lng > 160 && lng < 185)) continue;   // outside NZ: probably a stray row
+    const kindCell = cKind >= 0 ? String(r[cKind] ?? '') : '';
+    const kind = /photo|ppt/i.test(kindCell) ? 'photopoint' : /station/i.test(kindCell) ? 'station' : kindDefault;
+    out.push({ kind, line: cLine >= 0 && r[cLine] != null ? String(r[cLine]).trim() : null, num: cNum >= 0 && r[cNum] != null ? String(r[cNum]).trim() : String(out.length + 1),
+      lat: +lat.toFixed(7), lng: +lng.toFixed(7), e: Math.round(e), n: Math.round(n) });
+  }
+  return out;
+}
+// ---------- importing files (button or drag and drop) ----------
+// A site saved from this tool (GeoJSON, or GPX/KML exported here) opens as that site.
+// Anything else is added to the current site: lines become paths, points become existing
+// stations (or photopoints, when their name/folder/style mentions "ppt" or "photo").
+const isPhoto = s => /ppt|photo/i.test(s || '');
+function mkExisting(kind, line, num, lat, lng) {
+  const [e, n] = proj4('EPSG:4326', 'EPSG:2193', [lng, lat]);
+  return { kind, line: line == null || line === '' ? null : String(line).trim(), num: num == null ? '' : String(num).trim(), lat: +(+lat).toFixed(7), lng: +(+lng).toFixed(7), e: Math.round(e), n: Math.round(n) };
+}
+const inNZ = (lat, lng) => lat < -25 && lat > -56 && lng > 160 && lng < 185;
+
+async function readKmlText(f) {
+  if (/\.kmz$/i.test(f.name)) {
+    const zip = await JSZip.loadAsync(await f.arrayBuffer());
+    const kmls = Object.values(zip.files).filter(z => !z.dir && /\.kml$/i.test(z.name));
+    if (!kmls.length) throw new Error('No KML found inside the KMZ.');
+    const main = kmls.find(z => /(^|\/)doc\.kml$/i.test(z.name)) || kmls[0];
+    return main.async('string');
+  }
+  return f.text();
+}
+
+// -> { site } for one of our own saved sites, or { paths, ext, note } to add to the current site
+async function parseImport(f) {
+  const name = f.name, base = name.replace(/\.[^.]+$/, '');
+  if (/\.(xlsx|xls|csv)$/i.test(name)) {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    const ext = [], per = [];
+    wb.SheetNames.forEach(sh => {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, blankrows: false });
+      const kind = isPhoto(sh) || (wb.SheetNames.length === 1 && isPhoto(name)) ? 'photopoint' : 'station';
+      const got = readSheetRows(rows, kind);
+      per.push(`sheet “${sh.trim()}”: ${got.length}`);
+      ext.push(...got);
+    });
+    if (!ext.length) throw new Error('No rows with coordinates found. Expected columns for easting and northing (NZTM) or latitude and longitude.');
+    return { paths: [], ext, note: per.join(', ') };
+  }
+  if (/\.(geo)?json$/i.test(name)) {
+    const g = JSON.parse(await f.text());
+    const feats = g.type === 'FeatureCollection' ? g.features : g.type === 'Feature' ? [g] : [];
+    if (g.birdCounts) {
+      const meta = g.birdCounts, lines = [];
+      feats.forEach(ft => { const t = ft.geometry?.type, c = ft.geometry?.coordinates; if (t === 'LineString') lines.push(c); if (t === 'MultiLineString') lines.push(...c); });
+      const pts = feats.filter(ft => ft.geometry?.type === 'Point' && ft.properties?.kind === 'point')
+        .map(ft => ({ name: ft.properties.name, path: ft.properties.path || 1, along: ft.properties.along_m || 0, lat: ft.geometry.coordinates[1], lng: ft.geometry.coordinates[0], ...(ft.properties.added ? { added: true } : {}) }));
+      const ex = feats.filter(ft => ft.geometry?.type === 'Point' && /^existing-/.test(ft.properties?.kind || ''))
+        .map(ft => { const q = ft.properties, [lng, lat] = ft.geometry.coordinates, p = mkExisting(q.kind === 'existing-photopoint' ? 'photopoint' : 'station', q.line, q.number, lat, lng);
+          return { ...p, e: q.nztm_e ?? p.e, n: q.nztm_n ?? p.n }; });
+      return { site: { name: meta.name || base, spacing: meta.spacing, prefix: meta.prefix, paths: lines.map(l => l.map(([ln, la]) => [la, ln])), points: pts, existing: ex, deleted: meta.deleted || [] } };
+    }
+    const paths = [], ext = [];
+    feats.forEach(ft => {
+      const t = ft.geometry?.type, c = ft.geometry?.coordinates, q = ft.properties || {};
+      if (t === 'LineString') paths.push(c.map(([ln, la]) => [la, ln]));
+      if (t === 'MultiLineString') c.forEach(l => paths.push(l.map(([ln, la]) => [la, ln])));
+      const label = q.name ?? q.Name ?? q.number ?? q.id ?? q.label ?? '';
+      const pts = t === 'Point' ? [c] : t === 'MultiPoint' ? c : [];
+      pts.forEach(([ln, la]) => ext.push(mkExisting(isPhoto(q.kind || q.type || label) ? 'photopoint' : 'station', q.line ?? null, label, la, ln)));
+    });
+    return { paths, ext };
+  }
+  if (/\.(kml|kmz|gpx)$/i.test(name)) {
+    const text = /\.gpx$/i.test(name) ? await f.text() : await readKmlText(f);
+    const xml = new DOMParser().parseFromString(text, 'application/xml');
+    if (xml.querySelector('parsererror')) throw new Error('The file is not valid XML.');
+    const tag = (el, n) => [...el.getElementsByTagNameNS('*', n)];
+    const txt = (el, n) => (tag(el, n)[0] || {}).textContent || '';
+    if (/\.gpx$/i.test(name)) {
+      const paths = [...tag(xml, 'trkseg'), ...tag(xml, 'rte')].map(seg =>
+        [...tag(seg, 'trkpt'), ...tag(seg, 'rtept')].map(p => [+p.getAttribute('lat'), +p.getAttribute('lon')])).filter(l => l.length > 1);
+      const wpts = tag(xml, 'wpt');
+      if (/Bird Count Points/.test(xml.documentElement.getAttribute('creator') || '')) {
+        const pts = wpts.map(w => { const m = txt(w, 'desc').match(/(\d+) m along path (\d+)/);
+          return { name: txt(w, 'name'), lat: +w.getAttribute('lat'), lng: +w.getAttribute('lon'), along: m ? +m[1] : 0, path: m ? +m[2] : 1, ...(/\(added\)/.test(txt(w, 'desc')) ? { added: true } : {}) }; });
+        return { site: { name: base, paths, points: pts } };
+      }
+      const ext = wpts.map(w => mkExisting(isPhoto(txt(w, 'name') + ' ' + txt(w, 'type') + ' ' + txt(w, 'sym')) ? 'photopoint' : 'station', null, txt(w, 'name'), +w.getAttribute('lat'), +w.getAttribute('lon')));
+      return { paths, ext };
+    }
+    // KML / KMZ
+    const coordsOf = el => txt(el, 'coordinates').trim().split(/\s+/).filter(Boolean).map(t => t.split(',').map(Number)).map(([ln, la]) => [la, ln]);
+    const placemarks = tag(xml, 'Placemark');
+    if (placemarks.some(pm => /m along path \d+/.test(txt(pm, 'description')))) {
+      const paths = tag(xml, 'LineString').map(coordsOf).filter(l => l.length > 1);
+      const pts = placemarks.filter(pm => tag(pm, 'Point').length).map(pm => { const [[la, ln]] = coordsOf(tag(pm, 'Point')[0]), m = txt(pm, 'description').match(/(\d+) m along path (\d+)/);
+        return { name: txt(pm, 'name'), lat: la, lng: ln, along: m ? +m[1] : 0, path: m ? +m[2] : 1, ...(/\(added\)/.test(txt(pm, 'description')) ? { added: true } : {}) }; });
+      return { site: { name: base, paths, points: pts } };
+    }
+    const paths = [], ext = [];
+    let skipped = 0;
+    placemarks.forEach(pm => {
+      // folder names above the placemark, e.g. "Photopoints" or "Line 2"
+      const folders = []; for (let el = pm.parentElement; el; el = el.parentElement) if (/^(Folder|Document)$/.test(el.localName)) folders.push(txt(el, 'name'));
+      const pname = [...pm.children].find(c => c.localName === 'name')?.textContent?.trim() || '';
+      const kind = isPhoto([pname, pm.querySelector('styleUrl')?.textContent, ...folders].join(' ')) ? 'photopoint' : 'station';
+      tag(pm, 'LineString').forEach(ls => { const l = coordsOf(ls); if (l.length > 1) paths.push(l); });
+      tag(pm, 'Point').forEach(pt => { const [[la, ln]] = coordsOf(pt); ext.push(mkExisting(kind, null, pname, la, ln)); });
+      if (!tag(pm, 'LineString').length && !tag(pm, 'Point').length) skipped++;
+    });
+    return { paths, ext, note: skipped ? `${skipped} polygon${skipped === 1 ? '' : 's'} or other shape${skipped === 1 ? '' : 's'} skipped` : '' };
+  }
+  throw new Error('Unsupported file type. Use .xlsx, .csv, .kml, .kmz, .gpx or .geojson.');
+}
+
+async function importFiles(fileList) {
+  const files = [...fileList];
+  const msgs = [];
+  for (const f of files) {
+    try {
+      const r = await parseImport(f);
+      if (r.site) {
+        if (!r.site.paths.length && !(r.site.existing || []).length) throw new Error('Nothing to show in this file.');
+        if (dirty && hasContent() && !confirm(`Open ${f.name}? Unsaved changes to the current site will be lost.`)) continue;
+        loadSite(r.site);
+        current = null; dirty = true; refreshSiteUI(); saveDraft();
+        msgs.push(`Opened ${f.name}. Press Save to keep it in this browser's list.`);
+        continue;
+      }
+      const ext = r.ext.filter(p => inNZ(p.lat, p.lng));
+      const outside = r.ext.length - ext.length;
+      const seen = new Set(existing.map(p => [p.kind, p.line, p.num, p.lat.toFixed(6), p.lng.toFixed(6)].join('|')));
+      const fresh = ext.filter(p => { const k = [p.kind, p.line, p.num, p.lat.toFixed(6), p.lng.toFixed(6)].join('|'); if (seen.has(k)) return false; seen.add(k); return true; });
+      const sig = ll => ll.map(([la, ln]) => (+la).toFixed(6) + ',' + (+ln).toFixed(6)).join(' ');
+      const have = new Set(pathCoords().map(ll => sig(ll.map(c => [c.lat, c.lng]))));
+      const newPaths = r.paths.filter(ll => { const k = sig(ll); if (have.has(k)) return false; have.add(k); return true; });
+      const dupPaths = r.paths.length - newPaths.length;
+      r.paths = newPaths;
+      if (!fresh.length && !r.paths.length) { msgs.push(`${f.name}: nothing new to add (everything in it is already on the map).`); continue; }
+      existing = existing.concat(fresh);
+      renderExisting();
+      r.paths.forEach(ll => paths.addLayer(L.polyline(ll, lineStyle)));
+      if (r.paths.length) rebuild(); else markChanged();
+      const nSt = fresh.filter(p => p.kind === 'station').length, nPp = fresh.length - nSt;
+      const parts = [r.paths.length && `${r.paths.length} path${r.paths.length === 1 ? '' : 's'}`, nSt && `${nSt} station${nSt === 1 ? '' : 's'}`, nPp && `${nPp} photopoint${nPp === 1 ? '' : 's'}`].filter(Boolean);
+      const already = ext.length - fresh.length + dupPaths;
+      const extra = [r.note, already && `${already} already on the map`, outside && `${outside} outside NZ ignored`].filter(Boolean);
+      msgs.push(`Added from ${f.name}: ${parts.join(', ')}${extra.length ? ` (${extra.join('; ')})` : ''}.`);
+    } catch (e) { msgs.push(`Could not read ${f.name}: ${e.message}`); }
+  }
+  const all = [...paths.getLayers(), ...pointLayer.getLayers(), ...exStationLayer.getLayers(), ...exPptLayer.getLayers()];
+  if (all.length) map.fitBounds(L.featureGroup(all).getBounds(), { padding: [40, 40], maxZoom: 17 });
+  $('importStatus').innerHTML = msgs.map(esc).join('<br>');
+}
+
+$('openFileBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = () => { const fl = [...$('fileInput').files]; $('fileInput').value = ''; if (fl.length) importFiles(fl); };
+
+// drag and drop anywhere on the page
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+window.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+window.addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  if (e.dataTransfer.files.length) importFiles(e.dataTransfer.files);
+});
+$('removeExistingBtn').onclick = () => {
+  if (!existing.length || !confirm('Remove the existing stations and photopoints from this site?')) return;
+  existing = []; renderExisting(); markChanged();
+};
+
+// restore work in progress
+(function restore() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(DRAFT_KEY)); } catch (e) {}
+  if (s) {
+    loadSite(s);
+    current = s.current && readSites()[s.current] ? s.current : null;
+    dirty = s.current ? !!s.dirty : hasContent();
+  } else { rebuild(); renderExisting(); dirty = false; }
+  refreshSiteUI();
+})();
+</script>
+</body>
+</html>

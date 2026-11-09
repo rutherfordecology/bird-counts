@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f4d3a">
+<title>Bird Count Field</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #f4f3ee; --panel: #fff; --ink: #17201b; --muted: #5d6862; --line: #d9d8cf;
+    --accent: #1f4d3a; --accent-2: #2f6b4f; --todo: #e0592a; --done: #2e9d5b; --warn: #c98a00; --danger: #b3261e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 16px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg);
+         display: flex; flex-direction: column; overflow: hidden; }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .45; }
+  input, select { font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+
+  header { background: var(--accent); color: #fff; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; display: flex; gap: 8px; align-items: center; }
+  header .title { font-weight: 700; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header select { padding: 6px 8px; border: 0; max-width: 46%; }
+  #gps { font-size: 12.5px; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,.18); white-space: nowrap; }
+  #gps.good { background: #2e9d5b; } #gps.fair { background: #c98a00; } #gps.poor, #gps.off { background: #b3261e; }
+
+  main { flex: 1; min-height: 0; position: relative; }
+  .view { position: absolute; inset: 0; display: none; overflow: auto; }
+  .view.active { display: block; }
+  #mapView { overflow: hidden; }
+  #map { position: absolute; inset: 0; }
+  nav { display: flex; background: var(--panel); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+  nav button { flex: 1; border: 0; border-radius: 0; padding: 12px 4px; background: none; color: var(--muted); font-weight: 600; }
+  nav button.active { color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+
+  /* next-point card on the map */
+  #nextCard { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 500; background: var(--panel); border-radius: 14px;
+              box-shadow: 0 4px 18px rgba(0,0,0,.25); padding: 12px 14px; display: flex; align-items: center; gap: 12px; }
+  #nextCard .big { font-size: 26px; font-weight: 800; line-height: 1; }
+  #nextCard .info { flex: 1; min-width: 0; }
+  #nextCard .sub { color: var(--muted); font-size: 14px; }
+  #arrow { width: 44px; height: 44px; flex: none; }
+  #mapView .leaflet-bottom { bottom: 104px; }      /* keep zoom/scale clear of the next-point card */
+  #arrival { position: absolute; left: 10px; right: 10px; top: 10px; z-index: 1001; background: var(--done); color: #fff; border-radius: 14px;
+             padding: 14px; display: none; box-shadow: 0 4px 18px rgba(0,0,0,.3); }
+  #arrival.show { display: block; animation: pulse 1s ease-in-out 3; }
+  #arrival .row { display: flex; gap: 10px; align-items: center; }
+  #arrival b { font-size: 22px; }
+  #arrival button { background: #fff; color: var(--done); border: 0; font-weight: 700; }
+  @keyframes pulse { 50% { transform: scale(1.03); } }
+  .pt-label { background: var(--todo); color: #fff; border: 0; border-radius: 9px; padding: 0 5px; font-weight: 700; font-size: 11px; box-shadow: none; }
+  .pt-label.done { background: var(--done); }
+  .pt-label::before { display: none; }
+  .map-btns { position: absolute; right: 10px; top: 60px; z-index: 500; display: flex; flex-direction: column; gap: 8px; }
+  .map-btns button { padding: 8px 10px; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+
+  /* lists */
+  .pad { padding: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .ptrow { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .ptrow .nm { font-weight: 700; width: 64px; }
+  .ptrow .d { flex: 1; color: var(--muted); font-size: 14px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eee; color: var(--muted); white-space: nowrap; }
+  .badge.done { background: #dff3e6; color: #19703f; }
+  h2 { font-size: 17px; margin: 4px 0 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label.f { display: block; margin: 10px 0 4px; font-size: 14px; color: var(--muted); }
+
+  /* count screen */
+  #countView { position: fixed; inset: 0; z-index: 1000; background: var(--bg); display: none; flex-direction: column; }
+  #countView.show { display: flex; }
+  #countHead { background: var(--accent); color: #fff; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; }
+  #countHead .top { display: flex; align-items: center; gap: 10px; }
+  #countHead .pt { font-size: 22px; font-weight: 800; flex: 1; }
+  #timer { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+  #timerBtn { background: #fff; color: var(--accent); border: 0; font-weight: 800; padding: 12px 18px; font-size: 17px; }
+  #countHead.running { background: #2b5f8a; }
+  #countHead.finished { background: var(--done); }
+  #countSummary { font-size: 14px; opacity: .9; margin-top: 4px; }
+  #spList { flex: 1; overflow: auto; padding-bottom: 8px; }
+  .sp { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 56px; user-select: none; }
+  .sp .minus { width: 52px; align-self: stretch; border: 0; border-radius: 0; font-size: 26px; color: var(--muted); background: none; padding: 0; }
+  .sp .name { flex: 1; padding: 8px 4px; }
+  .sp .name small { display: block; color: var(--muted); font-size: 12px; }
+  .sp .n { min-width: 40px; text-align: center; font-size: 22px; font-weight: 800; color: #bbb; }
+  .sp .plus { width: 64px; align-self: stretch; border: 0; border-radius: 0; font-size: 30px; font-weight: 700; background: #eef5f0; color: var(--accent); padding: 0; }
+  .sp.has { background: #eef7f1; }
+  .sp.has .n { color: var(--accent); }
+  .locked .sp .plus, .locked .sp .minus { opacity: .3; pointer-events: none; }
+  #countFoot { display: flex; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); }
+  #countFoot button { flex: 1; padding: 14px 8px; }
+
+  /* other species dialog */
+  #otherDlg { position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,.4); display: none; }
+  #otherDlg.show { display: flex; align-items: flex-end; }
+  #otherDlg .sheet { background: var(--panel); width: 100%; max-height: 85%; border-radius: 16px 16px 0 0; display: flex; flex-direction: column; padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+  #otherSearch { width: 100%; font-size: 18px; }
+  #otherResults { overflow: auto; margin-top: 8px; }
+  #otherResults button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px 6px; }
+  #otherResults small { color: var(--muted); font-style: italic; }
+
+  #toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: #222; color: #fff; padding: 10px 16px; border-radius: 10px;
+           z-index: 2000; display: none; max-width: 90%; text-align: center; font-size: 15px; }
+  .progress { height: 8px; background: #e5e5df; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .progress div { height: 100%; width: 0; background: var(--accent-2); transition: width .2s; }
+  table.data { border-collapse: collapse; width: 100%; font-size: 14px; }
+  table.data td, table.data th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title" id="title">Bird counts</div>
+  <select id="loopSel" aria-label="Loop"></select>
+  <span id="gps" class="off">GPS off</span>
+</header>
+
+<main>
+  <section class="view active" id="mapView">
+    <div id="map"></div>
+    <div class="map-btns">
+      <button id="centreBtn" title="Centre on me">◎ Me</button>
+      <button id="fitBtn" title="Show the whole loop">Loop</button>
+    </div>
+    <div id="arrival">
+      <div class="row"><div style="flex:1">You're at<br><b id="arrivalPt">—</b></div><button id="arrivalStart">Start count</button></div>
+    </div>
+    <div id="nextCard">
+      <svg id="arrow" viewBox="0 0 44 44"><circle cx="22" cy="22" r="21" fill="#eef5f0" stroke="#cfe3d6"/><path id="arrowPath" d="M22 6 L31 30 L22 25 L13 30 Z" fill="#1f4d3a"/></svg>
+      <div class="info">
+        <div class="sub" id="nextLabel">Next point</div>
+        <div class="big" id="nextDist">—</div>
+        <div class="sub" id="nextSub">Load points in Setup to start.</div>
+      </div>
+      <button class="primary" id="countHereBtn">Count</button>
+    </div>
+  </section>
+
+  <section class="view" id="pointsView"><div id="pointsList"></div></section>
+
+  <section class="view" id="dataView"><div class="pad" id="dataPane"></div></section>
+
+  <section class="view" id="setupView"><div class="pad">
+    <div class="card">
+      <h2>Points</h2>
+      <div class="muted" id="surveyInfo">No points loaded.</div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="loadPointsBtn">Load points file…</button>
+        <input type="file" id="pointsFile" accept=".geojson,.json,.gpx" hidden>
+      </div>
+      <div class="muted" style="margin-top:8px">A GeoJSON saved from the Bird Count Points planner (Save to file). Existing stations become loops by line (Line 1, Line 2…); drawn paths become Path 1, Path 2…</div>
+      <label class="f" for="surveyName">Survey name (used in file names and eBird locations)</label>
+      <input id="surveyName" style="width:100%">
+    </div>
+    <div class="card">
+      <h2>Offline map</h2>
+      <div class="muted">Download the map around your points while you have signal. It is kept on this phone.</div>
+      <div class="row" style="margin-top:10px">
+        <label><input type="checkbox" id="dlTopo"> include topo map</label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="dlBtn">Download map for all loops</button>
+        <button id="dlLoopBtn">This loop only</button>
+      </div>
+      <div class="muted" id="dlStatus" style="margin-top:8px"></div>
+      <div class="progress" id="dlProg" hidden><div></div></div>
+    </div>
+    <div class="card">
+      <h2>Counting</h2>
+      <label class="f" for="observer">Observer</label>
+      <input id="observer" style="width:100%">
+      <div class="row" style="margin-top:6px">
+        <div style="flex:1"><label class="f" for="duration">Count length (minutes)</label><input id="duration" type="number" min="1" max="60" style="width:100%"></div>
+        <div style="flex:1"><label class="f" for="radius">Arrival alert within (m)</label><input id="radius" type="number" min="5" max="200" style="width:100%"></div>
+      </div>
+      <label class="f"><input type="checkbox" id="keepAwake"> keep the screen on while the app is open</label>
+      <label class="f"><input type="checkbox" id="sound"> beep as well as vibrate</label>
+      <div class="row" style="margin-top:10px"><button id="testAlertBtn">Test alert</button></div>
+    </div>
+    <div class="card">
+      <h2>About</h2>
+      <div class="muted" id="aboutInfo"></div>
+    </div>
+  </div></section>
+</main>
+
+<nav>
+  <button data-view="mapView" class="active">Map</button>
+  <button data-view="pointsView">Points</button>
+  <button data-view="dataView">Data</button>
+  <button data-view="setupView">Setup</button>
+</nav>
+
+<!-- count screen -->
+<div id="countView">
+  <div id="countHead">
+    <div class="top">
+      <div class="pt" id="countPt">—</div>
+      <div id="timer">5:00</div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="timerBtn">Start 5 min</button>
+      <div id="countSummary" style="flex:1"></div>
+    </div>
+  </div>
+  <div id="spList"></div>
+  <div id="countFoot">
+    <button id="otherBtn">Other…</button>
+    <button id="cancelCountBtn" class="danger">Cancel</button>
+    <button id="saveCountBtn" class="primary">Save</button>
+  </div>
+</div>
+
+<div id="otherDlg"><div class="sheet">
+  <div class="row"><input id="otherSearch" placeholder="Search any species, or type a name" autocomplete="off"><button id="otherClose">Close</button></div>
+  <div id="otherResults"></div>
+</div></div>
+
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="species.js"></script>
+<script>
+const VERSION = '0.1.0';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- state (kept on this phone) ----------
+const KEY = 'birdfield.v1';
+let S = {
+  survey: { name: '', points: [] },      // points: { id, loop, name, lat, lng, order }
+  counts: [],                            // see saveCount()
+  extraSpecies: [],                      // names added through "Other", kept for next time
+  settings: { observer: '', duration: 5, radius: 25, keepAwake: true, sound: true },
+  loop: '',
+};
+function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s) S = { ...S, ...s, settings: { ...S.settings, ...(s.settings || {}) } }; } catch (e) {} }
+function persist() {
+  try { localStorage.setItem(KEY, JSON.stringify(S)); }
+  catch (e) { toast('Could not save on this phone: ' + e.message + '. Export your data now.', 8000); }
+}
+load();
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+// ---------- helpers ----------
+function toast(msg, ms = 3000) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', ms); }
+const R = 6371008.8, rad = d => d * Math.PI / 180;
+function dist(a, b) {
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function bearing(a, b) {
+  const y = Math.sin(rad(b.lng - a.lng)) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(rad(b.lng - a.lng));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+const compass = b => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(b / 45) % 8];
+const fmtDist = m => m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + ' km' : Math.round(m) + ' m';
+const pad2 = n => String(n).padStart(2, '0');
+const localDate = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const localTime = d => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+const today = () => localDate(new Date());
+const natural = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+
+// ---------- points & loops ----------
+const loops = () => [...new Set(S.survey.points.map(p => p.loop))].sort(natural);
+const loopPoints = (loop = S.loop) => S.survey.points.filter(p => p.loop === loop).sort((a, b) => a.order - b.order || natural(a.name, b.name));
+const countedToday = p => S.counts.some(c => c.pointId === p.id && c.date === today());
+function refreshLoopSel() {
+  const ls = loops();
+  if (!ls.includes(S.loop)) S.loop = ls[0] || '';
+  $('loopSel').innerHTML = ls.length ? ls.map(l => {
+    const pts = loopPoints(l), done = pts.filter(countedToday).length;
+    return `<option value="${esc(l)}"${l === S.loop ? ' selected' : ''}>${esc(l)} (${done}/${pts.length})</option>`;
+  }).join('') : '<option>No points</option>';
+  $('title').textContent = S.survey.name || 'Bird counts';
+}
+$('loopSel').onchange = () => { S.loop = $('loopSel').value; persist(); drawPoints(); fitLoop(); renderPoints(); updateNav(); };
+
+// Read a GeoJSON from the planner (or a plain GeoJSON / GPX of points)
+function parsePoints(text, filename) {
+  const pts = [];
+  if (/\.gpx$/i.test(filename)) {
+    const xml = new DOMParser().parseFromString(text, 'application/xml');
+    [...xml.getElementsByTagNameNS('*', 'wpt')].forEach((w, i) => pts.push({ loop: 'Points', name: (w.getElementsByTagNameNS('*', 'name')[0] || {}).textContent || String(i + 1), lat: +w.getAttribute('lat'), lng: +w.getAttribute('lon'), order: i }));
+    return { name: filename.replace(/\.[^.]+$/, ''), pts };
+  }
+  const g = JSON.parse(text), meta = g.birdCounts || {};
+  const feats = g.type === 'FeatureCollection' ? g.features : [g];
+  feats.forEach((ft, i) => {
+    if (ft.geometry?.type !== 'Point') return;
+    const q = ft.properties || {}, [lng, lat] = ft.geometry.coordinates;
+    if (q.kind === 'existing-photopoint') return;          // photopoints aren't count stations
+    let loop, name, order;
+    if (q.kind === 'existing-station') {
+      const line = q.line ?? '', num = q.number ?? '';
+      loop = line !== '' ? (isNaN(line) ? String(line) : 'Line ' + line) : 'Stations';
+      // 2023-24 Waimata data names stations 101, 102 … (line + two-digit number)
+      name = /^\d+$/.test(line) && /^\d+$/.test(num) ? line + pad2(num) : [line, num].filter(Boolean).join('-');
+      order = +num || i;
+    } else if (q.kind === 'point') {
+      loop = q.loop || 'Path ' + (q.path || 1); name = q.name || String(i + 1); order = q.along_m ?? i;
+    } else {
+      loop = q.loop || q.line && ('Line ' + q.line) || 'Points'; name = q.name ?? q.number ?? q.id ?? String(i + 1); order = i;
+    }
+    pts.push({ loop, name: String(name), lat, lng, order });
+  });
+  return { name: meta.name || filename.replace(/\.[^.]+$/, ''), pts };
+}
+$('loadPointsBtn').onclick = () => $('pointsFile').click();
+$('pointsFile').onchange = async () => {
+  const f = $('pointsFile').files[0]; $('pointsFile').value = '';
+  if (!f) return;
+  try {
+    const { name, pts } = parsePoints(await f.text(), f.name);
+    if (!pts.length) throw new Error('No count points found in the file.');
+    if (S.survey.points.length && !confirm(`Replace the ${S.survey.points.length} points loaded now with ${pts.length} from ${f.name}? Counts already recorded are kept.`)) return;
+    // ids stay stable for the same loop + point name, so earlier counts still line up
+    S.survey = { name: S.survey.name && S.survey.points.length ? S.survey.name : name.replace(/\s*\d{4}$/, ''), points: pts.map(p => ({ ...p, id: p.loop + '|' + p.name })) };
+    S.loop = loops()[0];
+    persist(); refreshAll(); fitLoop();
+    toast(`Loaded ${pts.length} points in ${loops().length} loop${loops().length === 1 ? '' : 's'}.`);
+  } catch (e) { alert('Could not read ' + f.name + ':\n' + e.message); }
+};
+
+// ---------- map ----------
+const map = L.map('map', { zoomControl: false }).setView([-41, 174], 5);
+L.control.zoom({ position: 'bottomleft' }).addTo(map);
+// crossOrigin so tiles can be cached and served offline by the service worker
+const TILES = {
+  aerial: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, attribution: 'Imagery © Esri' },
+  topo: { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom: 17, attribution: '© OpenTopoMap, © OpenStreetMap contributors' },
+};
+const bases = {
+  'Aerial': L.tileLayer(TILES.aerial.url, { maxZoom: 19, maxNativeZoom: 19, crossOrigin: true, attribution: TILES.aerial.attribution }),
+  'Topo': L.tileLayer(TILES.topo.url, { maxZoom: 19, maxNativeZoom: 17, crossOrigin: true, attribution: TILES.topo.attribution }),
+};
+bases.Aerial.addTo(map);
+L.control.layers(bases, null, { position: 'topright' }).addTo(map);
+L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
+const ptLayer = L.layerGroup().addTo(map);
+const meMarker = L.circleMarker([0, 0], { radius: 8, color: '#fff', weight: 3, fillColor: '#2b6cd6', fillOpacity: 1 });
+const meAcc = L.circle([0, 0], { radius: 1, color: '#2b6cd6', weight: 1, fillOpacity: .12 });
+const toNext = L.polyline([], { color: '#fff', weight: 3, dashArray: '6 6', opacity: .9 });
+
+function drawPoints() {
+  ptLayer.clearLayers();
+  S.survey.points.forEach(p => {
+    const inLoop = p.loop === S.loop, done = countedToday(p);
+    const m = L.circleMarker([p.lat, p.lng], { radius: inLoop ? 8 : 5, color: '#fff', weight: 2, fillColor: done ? '#2e9d5b' : inLoop ? '#e0592a' : '#888', fillOpacity: inLoop ? 1 : .7 })
+      .on('click', () => { target = p; updateNav(); })
+      .addTo(ptLayer);
+    if (inLoop) m.bindTooltip(esc(p.name), { permanent: true, direction: 'right', offset: [7, 0], className: 'pt-label' + (done ? ' done' : '') });
+  });
+}
+function fitLoop() {
+  const pts = loopPoints();
+  if (pts.length) map.fitBounds(L.latLngBounds(pts.map(p => [p.lat, p.lng])), { padding: [40, 40], maxZoom: 17 });
+}
+$('fitBtn').onclick = fitLoop;
+$('centreBtn').onclick = () => { if (me) map.setView([me.lat, me.lng], Math.max(map.getZoom(), 16)); else toast('Waiting for GPS…'); };
+
+// ---------- GPS, next point, arrival alert ----------
+let me = null, target = null, watchId = null;
+const alerted = new Set();   // points that have alerted; they can alert again once you walk away
+function startGps() {
+  if (!navigator.geolocation) { setGps('off', 'No GPS'); return; }
+  watchId = navigator.geolocation.watchPosition(pos => onPosition({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy }),
+    err => setGps('off', err.code === 1 ? 'GPS blocked' : 'No GPS fix'), { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+}
+function setGps(cls, text) { const g = $('gps'); g.className = cls; g.textContent = text; }
+window.simulatePosition = (lat, lng, acc = 5) => onPosition({ lat, lng, acc });   // for testing on a desktop
+
+function onPosition(p) {
+  me = p;
+  setGps(p.acc <= 10 ? 'good' : p.acc <= 25 ? 'fair' : 'poor', '±' + Math.round(p.acc) + ' m');
+  meMarker.setLatLng([p.lat, p.lng]).addTo(map); meAcc.setLatLng([p.lat, p.lng]).setRadius(p.acc).addTo(map);
+  checkArrival();
+  updateNav();
+}
+function nextPoint() {
+  if (target && !countedToday(target)) return target;
+  const todo = loopPoints().filter(p => !countedToday(p));
+  if (!todo.length) return null;
+  if (!me) return todo[0];
+  return todo.reduce((best, p) => dist(me, p) < dist(me, best) ? p : best);
+}
+function updateNav() {
+  const n = nextPoint();
+  const pts = loopPoints(), done = pts.filter(countedToday).length;
+  if (!S.survey.points.length) { $('nextLabel').textContent = 'No points'; $('nextDist').textContent = '—'; $('nextSub').textContent = 'Load points in Setup to start.'; toNext.remove(); return; }
+  if (!n) { $('nextLabel').textContent = S.loop; $('nextDist').textContent = 'All done'; $('nextSub').textContent = `${done}/${pts.length} points counted today`; toNext.remove(); $('arrowPath').parentNode.style.visibility = 'hidden'; return; }
+  $('arrowPath').parentNode.style.visibility = 'visible';
+  $('nextLabel').textContent = `Next: ${n.name}` + (target === n ? ' (chosen)' : '');
+  if (me) {
+    const d = dist(me, n), b = bearing(me, n);
+    $('nextDist').textContent = fmtDist(d);
+    $('nextSub').textContent = `${compass(b)} · ${done}/${pts.length} done today`;
+    $('arrowPath').setAttribute('transform', `rotate(${b} 22 22)`);
+    toNext.setLatLngs([[me.lat, me.lng], [n.lat, n.lng]]).addTo(map);
+  } else {
+    $('nextDist').textContent = '—'; $('nextSub').textContent = `Waiting for GPS · ${done}/${pts.length} done today`; toNext.remove();
+  }
+}
+function checkArrival() {
+  const r = +S.settings.radius || 25;
+  let hit = null;
+  S.survey.points.forEach(p => {
+    const d = dist(me, p);
+    if (d > r * 2) alerted.delete(p.id);                    // walked away: may alert again
+    if (d <= r && !alerted.has(p.id) && !countedToday(p) && (!hit || d < dist(me, hit))) hit = p;
+  });
+  if (hit && !countView.classList.contains('show')) {
+    alerted.add(hit.id);
+    target = hit;
+    $('arrivalPt').textContent = hit.name + (hit.loop !== S.loop ? ` (${hit.loop})` : '');
+    $('arrival').classList.remove('show'); void $('arrival').offsetWidth; $('arrival').classList.add('show');
+    alertUser('arrive');
+  }
+}
+$('arrivalStart').onclick = () => { $('arrival').classList.remove('show'); openCount(target); };
+$('arrival').addEventListener('click', e => { if (e.target === $('arrival')) $('arrival').classList.remove('show'); });
+$('countHereBtn').onclick = () => {
+  const n = nextPoint();
+  if (!n) return toast('No points left in this loop today.');
+  if (me && dist(me, n) > Math.max(60, (+S.settings.radius || 25) * 2) && !confirm(`You're ${fmtDist(dist(me, n))} from ${n.name}. Count it anyway?`)) return;
+  openCount(n);
+};
+
+// alerts: vibrate + beep (sound needs one tap on the page first, a browser rule)
+let audio = null;
+document.addEventListener('pointerdown', () => { if (!audio) try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }, { once: true });
+function beep(freqs) {
+  if (!audio || !S.settings.sound) return;
+  let t = audio.currentTime;
+  freqs.forEach(f => { const o = audio.createOscillator(), g = audio.createGain(); o.frequency.value = f; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.5, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + .25); o.start(t); o.stop(t + .27); t += .3; });
+}
+function alertUser(kind) {
+  if (kind === 'arrive') { navigator.vibrate?.([400, 150, 400, 150, 400]); beep([880, 1175, 1568]); }
+  if (kind === 'done') { navigator.vibrate?.([800, 200, 800]); beep([1568, 1175, 880, 1568]); }
+}
+$('testAlertBtn').onclick = () => { alertUser('arrive'); toast('That is the arrival alert.'); };
+
+// keep the screen on (needs the page visible; re-requested when you come back to it)
+let wakeLock = null;
+async function keepAwake() {
+  if (!S.settings.keepAwake || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+
+// ---------- species, ranked by how often they were recorded on this loop ----------
+function speciesFor(loop) {
+  const key = (String(loop).match(/^Line\s*(\d+)$/i) || [])[1];
+  const ranked = SPECIES_LOCAL.local.map(s => ({ ...s, score: key && SPECIES_LOCAL.countsByLoop[key] ? (s.byLoop[key] || 0) + s.p / 1000 : s.p }));
+  ranked.sort((a, b) => b.score - a.score);
+  const names = new Set(ranked.map(s => s.name));
+  S.extraSpecies.forEach(x => { if (!names.has(x.name)) { ranked.push({ ...x, score: 0, extra: true }); names.add(x.name); } });
+  return ranked;
+}
+
+// "in 41% of counts on Line 1", or the overall rate when it wasn't recorded on this line
+function likelihoodText(s, loop) {
+  const key = (String(loop).match(/^Line\s*(\d+)$/i) || [])[1];
+  const pct = v => v >= 0.005 ? Math.round(v * 100) + '%' : '<1%';
+  if (key && SPECIES_LOCAL.countsByLoop[key]) {
+    const v = s.byLoop?.[key] || 0;
+    return v ? `${pct(v)} of past counts on ${loop}` : `not yet on ${loop} · ${pct(s.p)} overall`;
+  }
+  return `${pct(s.p)} of past counts`;
+}
+
+// ---------- the count ----------
+const countView = $('countView');
+let C = null, tick = null;   // count in progress
+function openCount(p) {
+  C = { point: p, items: {}, order: speciesFor(p.loop), startedAt: null, endsAt: null, finished: false };
+  $('countPt').textContent = `${p.name} · ${p.loop}`;
+  $('countHead').className = '';
+  $('timerBtn').textContent = `Start ${S.settings.duration} min`;
+  $('timerBtn').style.display = '';
+  $('timer').textContent = `${S.settings.duration}:00`;
+  countView.classList.add('show');
+  renderSpecies();
+  $('spList').scrollTop = 0;
+  keepAwake();
+}
+function renderSpecies() {
+  const total = Object.values(C.items).reduce((a, b) => a + b, 0), spp = Object.values(C.items).filter(n => n > 0).length;
+  $('countSummary').textContent = spp ? `${spp} species · ${total} birds` : 'Tap a species to count it';
+  $('spList').classList.toggle('locked', C.finished && !C.editing);
+  $('spList').innerHTML = C.order.map((s, i) => {
+    const n = C.items[s.name] || 0;
+    return `<div class="sp${n ? ' has' : ''}" data-i="${i}"><button class="minus" data-act="-" aria-label="one less">−</button>
+      <div class="name">${esc(s.name)}<small>${s.extra ? 'added by you' : likelihoodText(s, C.point.loop)}</small></div>
+      <div class="n">${n}</div><button class="plus" data-act="+" aria-label="one more">+</button></div>`;
+  }).join('');
+}
+$('spList').addEventListener('click', e => {
+  if (C.finished && !C.editing) return toast('Time is up. Tap "Edit" to correct a count.');
+  const row = e.target.closest('.sp'); if (!row) return;
+  const s = C.order[+row.dataset.i], minus = e.target.dataset.act === '-';
+  C.items[s.name] = Math.max(0, (C.items[s.name] || 0) + (minus ? -1 : 1));
+  if (!minus && !C.startedAt) startTimer();       // the first bird starts the clock if you forgot
+  navigator.vibrate?.(minus ? 15 : 30);
+  renderSpecies();
+});
+function startTimer() {
+  C.startedAt = new Date();
+  C.endsAt = Date.now() + S.settings.duration * 60000;
+  C.gps = me ? { ...me } : null;
+  $('countHead').className = 'running';
+  $('timerBtn').style.display = 'none';
+  tick = setInterval(updateTimer, 250); updateTimer();
+}
+function updateTimer() {
+  const left = Math.max(0, C.endsAt - Date.now());
+  $('timer').textContent = `${Math.floor(left / 60000)}:${pad2(Math.floor(left / 1000) % 60)}`;
+  if (left <= 0) {
+    clearInterval(tick); C.finished = true;
+    $('countHead').className = 'finished';
+    $('timer').textContent = 'Done';
+    $('timerBtn').textContent = 'Edit'; $('timerBtn').style.display = '';
+    alertUser('done'); renderSpecies();
+  }
+}
+$('timerBtn').onclick = () => {
+  if (!C.startedAt) return startTimer();
+  if (C.finished) { C.editing = !C.editing; $('timerBtn').textContent = C.editing ? 'Lock' : 'Edit'; renderSpecies(); }
+};
+$('cancelCountBtn').onclick = () => {
+  const any = Object.values(C.items).some(n => n > 0);
+  if (any && !confirm('Discard this count?')) return;
+  closeCount();
+};
+$('saveCountBtn').onclick = () => {
+  if (!C.startedAt) return toast('Start the timer first (or tap a species).');
+  if (!C.finished && !confirm(`The ${S.settings.duration} minutes aren't up yet. Save the count now?`)) return;
+  const p = C.point, start = C.startedAt;
+  const minutes = C.finished ? +S.settings.duration : Math.max(1, Math.round((Date.now() - start) / 60000));
+  S.counts.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    survey: S.survey.name, loop: p.loop, point: p.name, pointId: p.id, lat: p.lat, lng: p.lng,
+    date: localDate(start), start: localTime(start), minutes, observer: S.settings.observer,
+    gps: C.gps ? { lat: +C.gps.lat.toFixed(6), lng: +C.gps.lng.toFixed(6), acc: Math.round(C.gps.acc) } : null,
+    items: C.order.filter(s => C.items[s.name] > 0).map(s => ({ name: s.name, sci: s.sci || '', n: C.items[s.name] })),
+    app: VERSION,
+  });
+  persist();
+  if (target && target.id === p.id) target = null;
+  closeCount();
+  toast(`Saved ${p.name}. ${loopPoints().filter(x => !countedToday(x)).length} left on ${S.loop}.`);
+  refreshAll();
+};
+function closeCount() { clearInterval(tick); C = null; countView.classList.remove('show'); }
+
+// "Other": search eBird's full list (English NZ names) or keep exactly what you typed
+$('otherBtn').onclick = () => { $('otherDlg').classList.add('show'); $('otherSearch').value = ''; renderOther(); setTimeout(() => $('otherSearch').focus(), 50); };
+$('otherClose').onclick = () => $('otherDlg').classList.remove('show');
+$('otherSearch').oninput = renderOther;
+function renderOther() {
+  const q = $('otherSearch').value.trim().toLowerCase();
+  if (q.length < 2) { $('otherResults').innerHTML = '<div class="muted" style="padding:8px">Type at least 2 letters. Common or scientific names both work.</div>'; return; }
+  const words = q.split(/\s+/);
+  const hits = SPECIES_ALL.filter(([n, s]) => { const t = (n + ' ' + s).toLowerCase(); return words.every(w => t.includes(w)); })
+    .sort((a, b) => (b[0].toLowerCase().startsWith(q) - a[0].toLowerCase().startsWith(q))).slice(0, 40);
+  $('otherResults').innerHTML = hits.map(([n, s]) => `<button data-n="${esc(n)}" data-s="${esc(s)}">${esc(n)} <small>${esc(s)}</small></button>`).join('')
+    + `<button data-n="${esc($('otherSearch').value.trim())}" data-s="" data-typed="1">Add “${esc($('otherSearch').value.trim())}” as typed <small>(not matched to eBird)</small></button>`;
+}
+$('otherResults').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const name = b.dataset.n, sci = b.dataset.s;
+  let i = C.order.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
+  if (i < 0) {
+    C.order.push({ name, sci, extra: true });
+    if (!S.extraSpecies.some(x => x.name === name)) { S.extraSpecies.push({ name, sci }); persist(); }
+    i = C.order.length - 1;
+  }
+  C.items[C.order[i].name] = (C.items[C.order[i].name] || 0) + 1;
+  if (!C.startedAt) startTimer();
+  $('otherDlg').classList.remove('show');
+  renderSpecies();
+  $('spList').querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'center' });
+});
+
+// ---------- Points tab ----------
+function renderPoints() {
+  const pts = loopPoints();
+  $('pointsList').innerHTML = pts.length ? pts.map(p => {
+    const c = S.counts.filter(c => c.pointId === p.id && c.date === today());
+    const d = me ? fmtDist(dist(me, p)) + ' ' + compass(bearing(me, p)) : '';
+    return `<div class="ptrow" data-id="${esc(p.id)}"><div class="nm">${esc(p.name)}</div><div class="d">${d}</div>
+      ${c.length ? `<span class="badge done">counted ${c[c.length - 1].start}</span>` : '<span class="badge">to do</span>'}
+      <button data-go="${esc(p.id)}">Go</button></div>`;
+  }).join('') : '<div class="pad muted">No points. Load a points file in Setup.</div>';
+}
+$('pointsList').addEventListener('click', e => {
+  const id = e.target.dataset.go; if (!id) return;
+  target = S.survey.points.find(p => p.id === id);
+  showView('mapView'); updateNav();
+  map.setView([target.lat, target.lng], Math.max(map.getZoom(), 16));
+});
+
+// ---------- Data tab: your records + exports ----------
+function renderData() {
+  const byDay = {};
+  S.counts.forEach(c => (byDay[c.date] = byDay[c.date] || []).push(c));
+  const days = Object.keys(byDay).sort().reverse();
+  $('dataPane').innerHTML = `
+    <div class="card"><h2>Export</h2>
+      <div class="muted">${S.counts.length} count${S.counts.length === 1 ? '' : 's'} on this phone. Tick days to export, or leave all ticked.</div>
+      <div id="dayPicks" style="margin:8px 0">${days.map(d => `<label style="display:block;padding:4px 0"><input type="checkbox" value="${d}" checked> ${d} · ${byDay[d].length} counts · ${[...new Set(byDay[d].map(c => c.loop))].join(', ')}</label>`).join('') || '<span class="muted">Nothing recorded yet.</span>'}</div>
+      <div class="row">
+        <button class="primary" id="expMine"${S.counts.length ? '' : ' disabled'}>My data (CSV)</button>
+        <button id="expEbird"${S.counts.length ? '' : ' disabled'}>eBird upload (CSV)</button>
+        <button id="expBackup"${S.counts.length ? '' : ' disabled'}>Backup (JSON)</button>
+      </div>
+      <div class="muted" style="margin-top:8px">eBird file: set your eBird species names to <b>English (New Zealand)</b> before uploading. The loop goes in each checklist's comments.</div>
+    </div>
+    ${days.map(d => `<div class="card"><h2>${d}</h2><table class="data"><tr><th>Loop</th><th>Point</th><th>Start</th><th>Species</th><th>Birds</th><th></th></tr>${
+      byDay[d].slice().sort((a, b) => a.start.localeCompare(b.start)).map(c => `<tr><td>${esc(c.loop)}</td><td>${esc(c.point)}</td><td>${c.start}</td><td>${c.items.length}</td><td>${c.items.reduce((a, x) => a + x.n, 0)}</td>
+        <td><button class="danger" data-del="${c.id}" style="padding:4px 8px">✕</button></td></tr>`).join('')}</table></div>`).join('')}
+    <div class="card"><h2>Restore</h2><div class="muted">Add counts from a backup file (duplicates are skipped).</div>
+      <div class="row" style="margin-top:8px"><button id="restoreBtn">Restore from backup…</button><input type="file" id="restoreFile" accept=".json" hidden></div></div>`;
+}
+$('dataPane').addEventListener('click', e => {
+  const t = e.target;
+  if (t.dataset.del) {
+    const c = S.counts.find(c => c.id === t.dataset.del);
+    if (c && confirm(`Delete the count at ${c.point} (${c.loop}, ${c.date} ${c.start})? This can't be undone.`)) { S.counts = S.counts.filter(x => x !== c); persist(); refreshAll(); }
+  }
+  if (t.id === 'expMine') exportMine();
+  if (t.id === 'expEbird') exportEbird();
+  if (t.id === 'expBackup') saveFile(`${fileStem()}-backup-${today()}.json`, JSON.stringify({ app: 'bird-count-field', version: VERSION, exported: new Date().toISOString(), ...S }, null, 1), 'application/json');
+  if (t.id === 'restoreBtn') $('restoreFile').click();
+});
+$('dataPane').addEventListener('change', async e => {
+  if (e.target.id !== 'restoreFile') return;
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const b = JSON.parse(await f.text()), have = new Set(S.counts.map(c => c.id));
+    const add = (b.counts || []).filter(c => !have.has(c.id));
+    S.counts.push(...add);
+    if (!S.survey.points.length && b.survey) S.survey = b.survey;
+    persist(); refreshAll(); toast(`Restored ${add.length} counts.`);
+  } catch (err) { alert('Could not read the backup: ' + err.message); }
+});
+const selectedCounts = () => { const days = [...document.querySelectorAll('#dayPicks input:checked')].map(i => i.value); return S.counts.filter(c => days.includes(c.date)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)); };
+const fileStem = () => (S.survey.name || 'bird-counts').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'bird-counts';
+const csvCell = v => { v = String(v ?? ''); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+const toCsv = rows => rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+
+// Your own long format: one row per species per count; a count with nothing seen still gets a row.
+function exportMine() {
+  const cs = selectedCounts(); if (!cs.length) return toast('Tick at least one day.');
+  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id']];
+  cs.forEach(c => (c.items.length ? c.items : [{ name: '(none recorded)', sci: '', n: 0 }]).forEach(x =>
+    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id])));
+  saveFile(`${fileStem()}-counts-${cs[0].date}${cs.length > 1 && cs[cs.length - 1].date !== cs[0].date ? '_to_' + cs[cs.length - 1].date : ''}.csv`, toCsv(rows), 'text/csv');
+}
+// eBird Record Format: no header, English (NZ) names, MM/DD/YYYY, plain UTF-8 without a BOM.
+function exportEbird() {
+  const cs = selectedCounts(); if (!cs.length) return toast('Tick at least one day.');
+  const rows = [], skipped = [], unmatched = new Set();
+  cs.forEach(c => {
+    if (!c.items.length) { skipped.push(c.point); return; }       // eBird can't import a checklist with no species
+    const [y, m, d] = c.date.split('-');
+    c.items.forEach(x => {
+      const [genus, ...sp] = (x.sci || '').split(' ');
+      if (!x.sci) unmatched.add(x.name);
+      rows.push([x.name, genus || '', sp.join(' '), x.n, '', `${c.survey} ${c.point}`.trim(), c.lat.toFixed(6), c.lng.toFixed(6), `${m}/${d}/${y}`, c.start, '', 'NZ', 'Stationary', 1, c.minutes, 'Y', '', '',
+        `Loop: ${c.loop}. Point ${c.point}. ${c.minutes}-minute bird count (seen or heard).${c.observer ? ' Observer: ' + c.observer + '.' : ''}`]);
+    });
+  });
+  saveFile(`${fileStem()}-ebird-${cs[0].date}.csv`, toCsv(rows), 'text/csv');
+  const notes = [skipped.length && `${skipped.length} count${skipped.length === 1 ? '' : 's'} with no birds left out (eBird can't take empty checklists): ${skipped.join(', ')}`,
+    unmatched.size && `Typed names eBird will ask you to match: ${[...unmatched].join(', ')}`].filter(Boolean);
+  if (notes.length) alert(notes.join('\n\n'));
+}
+async function saveFile(name, text, type) {
+  const file = new File([text], name, { type });
+  if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ---------- offline map download ----------
+const lon2x = (lng, z) => Math.floor((lng + 180) / 360 * 2 ** z);
+const lat2y = (lat, z) => Math.floor((1 - Math.log(Math.tan(rad(lat)) + 1 / Math.cos(rad(lat))) / Math.PI) / 2 * 2 ** z);
+// Tiles within `buf` metres of any point: zoom 12-14 across the whole area, 15-17 only near the points.
+function tilesFor(pts, withTopo) {
+  const out = new Set();
+  const add = (z, lat0, lat1, lng0, lng1, near) => {
+    for (let x = lon2x(lng0, z); x <= lon2x(lng1, z); x++) for (let y = lat2y(lat1, z); y <= lat2y(lat0, z); y++) {
+      if (near) {   // keep tiles whose centre is within ~1.5 tile widths of some point
+        const n = 2 ** z, lng = (x + .5) / n * 360 - 180, lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + .5) / n))) * 180 / Math.PI;
+        const tileM = 40075016 * Math.cos(rad(lat)) / n;
+        if (!pts.some(p => dist(p, { lat, lng }) < near + tileM * .75)) continue;
+      }
+      out.add(`aerial/${z}/${x}/${y}`); if (withTopo && z <= 17) out.add(`topo/${z}/${x}/${y}`);
+    }
+  };
+  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng);
+  const pad = .01;   // ~1 km around the area for the overview zooms
+  const [la0, la1, ln0, ln1] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lngs) - pad, Math.max(...lngs) + pad];
+  for (let z = 10; z <= 14; z++) add(z, la0, la1, ln0, ln1, 0);
+  for (let z = 15; z <= 17; z++) add(z, la0, la1, ln0, ln1, z === 17 ? 250 : 500);
+  return [...out];
+}
+const tileUrl = t => { const [k, z, x, y] = t.split('/'); return k === 'aerial' ? `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}` : `https://a.tile.opentopomap.org/${z}/${x}/${y}.png`; };
+async function downloadTiles(pts) {
+  if (!pts.length) return toast('Load points first.');
+  if (!('caches' in window)) return alert('This browser can\'t store maps offline.');
+  const tiles = tilesFor(pts, $('dlTopo').checked);
+  const cache = await caches.open('bc-tiles-v1');
+  const todo = [];
+  for (const t of tiles) if (!(await cache.match(tileUrl(t)))) todo.push(t);
+  if (!todo.length) { $('dlStatus').textContent = `All ${tiles.length} map tiles are already on this phone.`; return; }
+  if (!confirm(`Download ${todo.length} map tiles (about ${Math.round(todo.length * 0.025)} MB)? ${tiles.length - todo.length} are already saved.`)) return;
+  $('dlProg').hidden = false;
+  let done = 0, failed = 0;
+  const bar = $('dlProg').firstElementChild;
+  const worker = async () => {
+    while (todo.length) {
+      const t = todo.shift();
+      try { const r = await fetch(tileUrl(t), { mode: 'cors' }); if (r.ok) await cache.put(tileUrl(t), r); else failed++; } catch (e) { failed++; }
+      done++; bar.style.width = (100 * done / (done + todo.length)) + '%';
+      $('dlStatus').textContent = `Downloading… ${done} tiles`;
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  $('dlStatus').textContent = failed ? `Done, but ${failed} tiles failed. Try again with better signal.` : `Map saved: ${tiles.length} tiles around ${pts.length} points.`;
+  let est = ''; try { const e = await navigator.storage.estimate(); est = ` Using ${Math.round(e.usage / 1e6)} MB on this phone.`; } catch (e) {}
+  $('dlStatus').textContent += est;
+}
+$('dlBtn').onclick = () => downloadTiles(S.survey.points);
+$('dlLoopBtn').onclick = () => downloadTiles(loopPoints());
+
+// ---------- setup fields ----------
+function bindSetting(id, key, kind = 'value') {
+  const el = $(id);
+  el[kind === 'checked' ? 'checked' : 'value'] = S.settings[key];
+  el.addEventListener('change', () => { S.settings[key] = kind === 'checked' ? el.checked : el.type === 'number' ? +el.value : el.value; persist(); if (key === 'keepAwake') keepAwake(); });
+}
+bindSetting('observer', 'observer'); bindSetting('duration', 'duration'); bindSetting('radius', 'radius');
+bindSetting('keepAwake', 'keepAwake', 'checked'); bindSetting('sound', 'sound', 'checked');
+$('surveyName').value = S.survey.name;
+$('surveyName').addEventListener('change', () => { S.survey.name = $('surveyName').value.trim(); persist(); refreshLoopSel(); });
+
+// ---------- tabs ----------
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === id));
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === id));
+  if (id === 'mapView') setTimeout(() => map.invalidateSize(), 50);
+  if (id === 'pointsView') renderPoints();
+  if (id === 'dataView') renderData();
+}
+document.querySelector('nav').addEventListener('click', e => { if (e.target.dataset.view) showView(e.target.dataset.view); });
+
+function refreshAll() {
+  refreshLoopSel(); drawPoints(); updateNav();
+  if ($('pointsView').classList.contains('active')) renderPoints();
+  if ($('dataView').classList.contains('active')) renderData();
+  const ls = loops();
+  $('surveyInfo').textContent = S.survey.points.length ? `${S.survey.name || 'Survey'}: ${S.survey.points.length} points in ${ls.length} loop${ls.length === 1 ? '' : 's'} (${ls.join(', ')}).` : 'No points loaded.';
+  $('surveyName').value = S.survey.name;
+}
+$('aboutInfo').textContent = `Bird Count Field v${VERSION}. Species order: ${SPECIES_LOCAL.source}. "Other" searches eBird's full list (${SPECIES_ALL.length.toLocaleString()} names). Everything is stored on this phone only.`;
+
+refreshAll(); fitLoop(); startGps(); keepAwake();
+setInterval(() => { if ($('pointsView').classList.contains('active')) renderPoints(); }, 5000);
+if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

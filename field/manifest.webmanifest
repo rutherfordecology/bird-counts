@@ -1,0 +1,14 @@
+{
+  "name": "Bird Count Field",
+  "short_name": "Bird counts",
+  "description": "Five-minute bird counts at planned points, offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f3ee",
+  "theme_color": "#1f4d3a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
