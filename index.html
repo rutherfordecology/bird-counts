@@ -87,7 +87,7 @@
 <body>
 <aside id="panel">
   <header>
-    <h1>Bird Count Points <span class="ver">v0.8.4</span></h1>
+    <h1>Bird Count Points <span class="ver">v0.9.0</span></h1>
     <p class="sub">Draw a path. Count points are placed along it, each at least the set distance in a straight line from every other point, starting at the first click.</p>
   </header>
   <div class="controls">
@@ -120,6 +120,14 @@
       <div class="summary" id="existingSummary" style="flex:1"></div>
       <button id="removeExistingBtn" title="Remove the existing stations and photopoints from this site">Remove</button>
     </div>
+    <div class="row" id="exExportRow">
+      <span class="summary">Save as:</span>
+      <button id="exStKml" title="Existing stations, with any moves and deletions, in the same layout as the stations KML">Stations KML</button>
+      <button id="exStCsv">Stations CSV</button>
+      <button id="exPpKml" title="Photopoints, with any moves and deletions, in the same layout as the ppts KML">Photopoints KML</button>
+      <button id="exPpCsv">Photopoints CSV</button>
+    </div>
+    <div class="summary">Drag a station or photopoint to move it; click it to delete it or put it back.</div>
   </div>
   <div class="controls">
     <div class="row">
@@ -160,7 +168,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const VERSION = '0.8.4';
+const VERSION = '0.9.0';
 proj4.defs('EPSG:2193', '+proj=tmerc +lat_0=0 +lon_0=173 +k=0.9996 +x_0=1600000 +y_0=10000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
 
 // ---------- map ----------
@@ -768,9 +776,16 @@ function renderExisting() {
     const byLine = {};
     g.forEach(x => (byLine[x.line ?? ''] = byLine[x.line ?? ''] || []).push(p.kind === 'station' && /^\d$/.test(x.num) ? '0' + x.num : x.num));
     const label = Object.entries(byLine).map(([ln, nums]) => (ln !== '' ? (p.kind === 'station' ? ln + '-' : ln + ' ') : '') + nums.join(',')).join(' · ');
-    L.marker([p.lat, p.lng], { icon: exIcon(p.kind), keyboard: false })
+    const idx = g.map(x => existing.indexOf(x));
+    const movedBy = p.from ? Math.round(dist(p, p.from)) : 0;
+    const exName = x => `${x.line != null && x.line !== '' ? 'Line ' + esc(x.line) + ', ' : ''}no. ${esc(x.num)}`;
+    const popup = `<b>${k.label}${g.length > 1 ? 's' : ''}</b>${movedBy ? ` <span class="tag-added">moved ${movedBy} m</span>` : ''}<br>${
+      g.map((x, j) => `${exName(x)} <button data-exdel="${idx[j]}" title="Delete this ${k.label.toLowerCase()}">Delete</button>`).join('<br>')}<br>NZTM ${p.e} E ${p.n} N<br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}<br><i>Drag to move.</i>${
+      p.from ? `<br><button data-exback="${idx.join(',')}">Put back</button>` : ''}`;
+    L.marker([p.lat, p.lng], { icon: exIcon(p.kind), keyboard: false, draggable: true, autoPan: true })
       .bindTooltip(esc(label), { permanent: true, direction: 'left', offset: [-3, 0], className: 'ex-label ' + k.cls })
-      .bindPopup(`<b>${k.label}${g.length > 1 ? 's' : ''}</b><br>${g.map(x => `${x.line != null && x.line !== '' ? 'Line ' + esc(x.line) + ', ' : ''}no. ${esc(x.num)}`).join('<br>')}<br>NZTM ${p.e} E ${p.n} N<br>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`)
+      .bindPopup(popup)
+      .on('dragend', ev => moveExisting(idx, ev.target.getLatLng()))
       .addTo(k.layer);
   });
   const ns = existing.filter(p => p.kind === 'station').length, pp = existing.filter(p => p.kind === 'photopoint');
@@ -779,7 +794,72 @@ function renderExisting() {
     ? `<span class="swatch sq" style="background:#2364c9"></span>${ns} existing station${ns === 1 ? '' : 's'} &nbsp; <span class="swatch" style="background:#b02fb8"></span>${pp.length} photopoint${pp.length === 1 ? '' : 's'}${ppSpots !== pp.length ? ` at ${ppSpots} spots` : ''}`
     : 'No existing stations or photopoints. Import a spreadsheet, KML/KMZ or GPX to add them.';
   $('removeExistingBtn').disabled = !existing.length;
+  $('exStKml').disabled = $('exStCsv').disabled = !ns;
+  $('exPpKml').disabled = $('exPpCsv').disabled = !pp.length;
 }
+// Move every point at one spot (several photos share a spot); remember the first position, for Put back.
+function setExPos(x, lat, lng) {
+  const [e, n] = proj4('EPSG:4326', 'EPSG:2193', [lng, lat]);
+  Object.assign(x, { lat: +lat.toFixed(7), lng: +lng.toFixed(7), e: Math.round(e), n: Math.round(n) });
+}
+function moveExisting(idx, ll) {
+  idx.forEach(i => { const x = existing[i]; if (!x) return; if (!x.from) x.from = { lat: x.lat, lng: x.lng }; setExPos(x, ll.lat, ll.lng); });
+  renderExisting(); markChanged();
+}
+map.on('popupopen', e => {
+  const el = e.popup.getElement(); if (!el) return;
+  el.querySelectorAll('button[data-exdel]').forEach(b => b.onclick = () => {
+    const x = existing[+b.dataset.exdel]; if (!x) return;
+    if (!confirm(`Delete ${x.kind === 'station' ? 'station' : 'photopoint'} ${x.line ? x.line + (x.kind === 'station' ? '-' : ' ') : ''}${x.num}? (Saved files and the GitHub history keep the old version.)`)) return;
+    map.closePopup(); existing.splice(+b.dataset.exdel, 1); renderExisting(); markChanged();
+  });
+  const back = el.querySelector('button[data-exback]');
+  if (back) back.onclick = () => {
+    back.dataset.exback.split(',').forEach(i => { const x = existing[+i]; if (x?.from) { setExPos(x, x.from.lat, x.from.lng); delete x.from; } });
+    map.closePopup(); renderExisting(); markChanged();
+  };
+});
+
+// ---------- stations and photopoints as their own files (same layout as the Waimata stations/ppts files) ----------
+function exRows(kind) {
+  return existing.filter(p => p.kind === kind)
+    .sort((a, b) => String(a.line ?? '').localeCompare(String(b.line ?? ''), undefined, { numeric: true }) || (parseFloat(a.num) - parseFloat(b.num)) || String(a.num).localeCompare(String(b.num)));
+}
+function exportExisting(kind, fmt) {
+  const rows = exRows(kind), stem = (kind === 'station' ? 'stations' : 'ppts') + `-edited-${stamp()}`;
+  if (fmt === 'csv') {
+    const cell = v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const out = [['Line number (optional)', 'Station number', 'Station grid reference (easting) (7 digits)', 'Station grid reference (northing) (7 digits)', 'Latitude', 'Longitude']]
+      .concat(rows.map(p => [p.line ?? '', p.num, p.e, p.n, p.lat.toFixed(7), p.lng.toFixed(7)]));
+    download(stem + '.csv', out.map(r => r.map(cell).join(',')).join('\r\n') + '\r\n', 'text/csv');
+    return;
+  }
+  const color = kind === 'station' ? 'ffc96423' : 'ffb82fb0';
+  const pms = rows.map(p => `\t<Placemark>
+\t\t<name>${esc(p.num)}</name>
+\t\t<styleUrl>#pt</styleUrl>
+\t\t<ExtendedData>
+\t\t\t<Data name="Line_number__optional_"><value>${esc(p.line ?? '')}</value></Data>
+\t\t\t<Data name="Station_number"><value>${esc(p.num)}</value></Data>
+\t\t\t<Data name="Station_grid_reference__easting___7_digits_"><value>${p.e}</value></Data>
+\t\t\t<Data name="Station_grid_reference__northing___7_digits_"><value>${p.n}</value></Data>
+\t\t</ExtendedData>
+\t\t<Point><coordinates>${p.lng.toFixed(7)},${p.lat.toFixed(7)},0</coordinates></Point>
+\t</Placemark>`).join('\n');
+  download(stem + '.kml', `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+\t<name>${kind === 'station' ? 'stations' : 'ppts'}</name>
+\t<Style id="pt"><IconStyle><color>${color}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>
+${pms}
+</Document>
+</kml>
+`, 'application/vnd.google-earth.kml+xml');
+}
+$('exStKml').onclick = () => exportExisting('station', 'kml');
+$('exStCsv').onclick = () => exportExisting('station', 'csv');
+$('exPpKml').onclick = () => exportExisting('photopoint', 'kml');
+$('exPpCsv').onclick = () => exportExisting('photopoint', 'csv');
 
 // Find the columns in a sheet by their headers. NZTM easting/northing or lat/lon.
 function readSheetRows(rows, kindDefault) {
