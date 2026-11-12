@@ -1,5 +1,10 @@
 # Bird Count Field — changelog
 
+## v0.6.0 — 2026-11-12
+- Count conditions, as on the 5-minute bird count sheet: temperature (1–6), wind (0–3), other noise (0–2), sun (minutes, 0–5), precipitation type (N, M, R, H, S) and value (0–5). They're big buttons at the top of the count screen, open before you start the timer, then folded into one line you can tap to change (e.g. to add sun minutes at the end). Each count starts with the last count's conditions that day, except sun. Saving asks first if any are missing.
+- The count screen shows line number, station number and the NZTM grid reference (7-digit easting and northing), worked out from the point's position, plus the start time once the timer runs.
+- New columns at the end of My data: line_number, station_number, nztm_e, nztm_n, temperature, wind, other_noise, sun_min, precip_type, precip_value. Older counts get line, station and grid ref filled in too. The eBird export adds the conditions to each checklist's comments. Conditions survive the app closing mid-count.
+
 ## v0.5.1 — 2026-11-09
 - Each loop is drawn as a route joining its points in order (101 → 102 → …). The loop you have chosen is yellow; the others are faint grey.
 

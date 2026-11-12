@@ -88,6 +88,15 @@
   #countHead.running { background: #2b5f8a; }
   #countHead.finished { background: var(--done); }
   #countSummary { font-size: 14px; opacity: .9; margin-top: 4px; }
+  #countMeta { font-size: 13px; opacity: .9; margin-top: 2px; }
+  #condBox { margin-top: 8px; }
+  #condBox .cr { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+  #condBox .cl { width: 86px; font-size: 13px; line-height: 1.1; flex: none; }
+  #condBox .cb { flex: 1; padding: 8px 0; min-width: 0; border-radius: 8px; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); font-weight: 700; }
+  #condBox .cb.on { background: #fff; color: var(--accent); border-color: #fff; }
+  #condBox.closed .cr { display: none; }
+  #condSum { width: 100%; text-align: left; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); padding: 8px 10px; font-size: 14px; }
+  #condSum.missing { border-color: #ffd23f; }
   #spList { flex: 1; overflow: auto; padding-bottom: 8px; }
   .sp { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 56px; user-select: none; }
   .sp .minus { width: 52px; align-self: stretch; border: 0; border-radius: 0; font-size: 26px; color: var(--muted); background: none; padding: 0; }
@@ -233,6 +242,8 @@
       <div class="pt" id="countPt">—</div>
       <div id="timer">5:00</div>
     </div>
+    <div id="countMeta"></div>
+    <div id="condBox"><button id="condSum"></button><div id="condRows"></div></div>
     <div class="row" style="margin-top:8px">
       <button id="timerBtn">Start 5 min</button>
       <div id="countSummary" style="flex:1"></div>
@@ -256,7 +267,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.5.1';
+const VERSION = '0.6.0';
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -358,7 +369,7 @@ function parsePoints(text, filename) {
     } else {
       loop = q.loop || q.line && ('Line ' + q.line) || 'Points'; name = q.name ?? q.number ?? q.id ?? String(i + 1); order = i;
     }
-    pts.push({ loop, name: String(name), lat, lng, order, ...(q.kind === 'existing-station' ? { fixed: true } : {}) });
+    pts.push({ loop, name: String(name), lat, lng, order, ...(q.kind === 'existing-station' ? { fixed: true, line: String(q.line ?? ''), num: String(q.number ?? '') } : {}) });
   });
   return { name: meta.name || filename.replace(/\.[^.]+$/, ''), pts, photos };
 }
@@ -659,7 +670,7 @@ function saveCurrent() {
   try {
     localStorage.setItem(CURRENT_KEY, JSON.stringify({
       point: C.point, items: C.items, startedAt: C.startedAt ? C.startedAt.toISOString() : null,
-      endsAt: C.endsAt, finished: C.finished, editing: !!C.editing, gps: C.gps || null,
+      endsAt: C.endsAt, finished: C.finished, editing: !!C.editing, gps: C.gps || null, cond: C.cond || {},
       added: C.order.filter(s => s.extra).map(s => ({ name: s.name, sci: s.sci || '' })), savedAt: Date.now(),
     }));
   } catch (e) { storageFailed(e); }
@@ -674,7 +685,7 @@ function resumeCurrent() {
   C.items = s.items || {};
   (s.added || []).forEach(a => { if (!C.order.some(o => o.name === a.name)) C.order.push({ ...a, extra: true }); });
   Object.keys(C.items).forEach(n => { if (!C.order.some(o => o.name === n)) C.order.push({ name: n, sci: '', extra: true }); });
-  C.gps = s.gps; C.editing = s.editing;
+  C.gps = s.gps; C.editing = s.editing; C.cond = s.cond || C.cond;
   if (s.startedAt) {
     C.startedAt = new Date(s.startedAt); C.endsAt = s.endsAt;
     $('timerBtn').style.display = 'none';
@@ -683,19 +694,78 @@ function resumeCurrent() {
       $('timerBtn').textContent = C.editing ? 'Lock' : 'Edit'; $('timerBtn').style.display = '';
     } else { $('countHead').className = 'running'; tick = setInterval(updateTimer, 250); updateTimer(); }
   }
+  renderCond(!s.startedAt); showCountMeta();
   renderSpecies();
   toast(`Your unsaved count at ${p.name} is back, as you left it.`, 5000);
   return true;
 }
 
+// ---------- count conditions (as on the 5-minute bird count sheet) ----------
+const COND = [
+  { k: 'temp', label: 'Temperature', vals: ['1', '2', '3', '4', '5', '6'] },
+  { k: 'wind', label: 'Wind', vals: ['0', '1', '2', '3'] },
+  { k: 'noise', label: 'Other noise', vals: ['0', '1', '2'] },
+  { k: 'sun', label: 'Sun (min)', vals: ['0', '1', '2', '3', '4', '5'] },
+  { k: 'ptype', label: 'Precip type', vals: ['N', 'M', 'R', 'H', 'S'] },
+  { k: 'pval', label: 'Precip value', vals: ['0', '1', '2', '3', '4', '5'] },
+];
+const condText = c => COND.map(f => `${f.label.replace(' (min)', '')} ${c?.[f.k] ?? '–'}`).join(' · ');
+const condMissing = c => COND.filter(f => c?.[f.k] == null).map(f => f.label);
+// start from the last count today: conditions rarely change much between points
+function lastCond() {
+  const t = S.counts.filter(c => c.date === today() && c.cond).sort((a, b) => a.start.localeCompare(b.start)).pop();
+  if (!t) return {};
+  const { sun, ...rest } = t.cond;   // sun is minutes of sun during that count: fill it in fresh each time
+  return rest;
+}
+function renderCond(open) {
+  const box = $('condBox');
+  if (open != null) box.classList.toggle('closed', !open);
+  $('condRows').innerHTML = COND.map(f => `<div class="cr"><span class="cl">${f.label}</span>${f.vals.map(v => `<button class="cb${C.cond[f.k] === v ? ' on' : ''}" data-ck="${f.k}" data-cv="${v}">${v}</button>`).join('')}</div>`).join('');
+  const miss = condMissing(C.cond);
+  $('condSum').textContent = (box.classList.contains('closed') ? '✎ ' : '▾ ') + (miss.length === COND.length ? 'Conditions: tap to fill in' : condText(C.cond)) + (miss.length && miss.length < COND.length ? ` (missing: ${miss.join(', ')})` : '');
+  $('condSum').classList.toggle('missing', miss.length > 0);
+}
+$('condRows').addEventListener('click', e => {
+  const b = e.target.closest('button[data-ck]'); if (!b || !C) return;
+  C.cond[b.dataset.ck] = C.cond[b.dataset.ck] === b.dataset.cv ? undefined : b.dataset.cv;
+  if (C.cond[b.dataset.ck] === undefined) delete C.cond[b.dataset.ck];
+  renderCond(); saveCurrent();
+});
+$('condSum').onclick = () => renderCond($('condBox').classList.contains('closed'));
+// line, station number and NZTM grid reference of a point
+function stationOf(p) {
+  if (p.line != null && p.line !== '') return { line: p.line, station: p.num ?? p.name };
+  const m = /^Line (\S+)$/.exec(p.loop || '');
+  // Waimata-style names: line + two-digit station (205 on Line 2 is station 5)
+  if (m && /^\d+$/.test(p.name) && p.name.length > m[1].length && p.name.startsWith(m[1])) return { line: m[1], station: String(+p.name.slice(m[1].length)) };
+  return { line: m ? m[1] : (p.loop || ''), station: p.name };
+}
+// NZTM2000 (EPSG:2193) from latitude/longitude: transverse Mercator on GRS80, accurate to well under a metre
+function nztm(lat, lng) {
+  const a = 6378137, f = 1 / 298.257222101, k0 = 0.9996, lon0 = 173 * Math.PI / 180, FE = 1600000, FN = 10000000;
+  const e2 = f * (2 - f), ep2 = e2 / (1 - e2), phi = lat * Math.PI / 180, lam = lng * Math.PI / 180;
+  const N = a / Math.sqrt(1 - e2 * Math.sin(phi) ** 2), T = Math.tan(phi) ** 2, Cc = ep2 * Math.cos(phi) ** 2, A = (lam - lon0) * Math.cos(phi);
+  const M = a * ((1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256) * phi - (3 * e2 / 8 + 3 * e2 ** 2 / 32 + 45 * e2 ** 3 / 1024) * Math.sin(2 * phi)
+    + (15 * e2 ** 2 / 256 + 45 * e2 ** 3 / 1024) * Math.sin(4 * phi) - (35 * e2 ** 3 / 3072) * Math.sin(6 * phi));
+  const E = FE + k0 * N * (A + (1 - T + Cc) * A ** 3 / 6 + (5 - 18 * T + T ** 2 + 72 * Cc - 58 * ep2) * A ** 5 / 120);
+  const Nn = FN + k0 * (M + N * Math.tan(phi) * (A ** 2 / 2 + (5 - T + 9 * Cc + 4 * Cc ** 2) * A ** 4 / 24 + (61 - 58 * T + T ** 2 + 600 * Cc - 330 * ep2) * A ** 6 / 720));
+  return { e: Math.round(E), n: Math.round(Nn) };
+}
+function showCountMeta() {
+  const p = C.point, st = stationOf(p), g = nztm(p.lat, p.lng);
+  $('countMeta').textContent = `Line ${st.line} · Station ${st.station} · E ${g.e} N ${g.n}${C.startedAt ? ' · Start ' + localTime(C.startedAt) : ''}`;
+}
+
 function openCount(p, restoring = false) {
-  C = { point: p, items: {}, order: speciesFor(p.loop), startedAt: null, endsAt: null, finished: false };
+  C = { point: p, items: {}, order: speciesFor(p.loop), startedAt: null, endsAt: null, finished: false, cond: lastCond() };
   $('countPt').textContent = `${p.name} · ${p.loop}`;
   $('countHead').className = '';
   $('timerBtn').textContent = `Start ${S.settings.duration} min`;
   $('timerBtn').style.display = '';
   $('timer').textContent = `${S.settings.duration}:00`;
   countView.classList.add('show');
+  renderCond(true); showCountMeta();
   renderSpecies();
   $('spList').scrollTop = 0;
   keepAwake();
@@ -728,6 +798,7 @@ function startTimer() {
   C.gps = me ? { ...me } : null;
   $('countHead').className = 'running';
   $('timerBtn').style.display = 'none';
+  renderCond(false); showCountMeta();
   saveCurrent();
   tick = setInterval(updateTimer, 250); updateTimer();
 }
@@ -755,6 +826,8 @@ $('cancelCountBtn').onclick = () => {
 $('saveCountBtn').onclick = () => {
   if (!C.startedAt) return toast('Start the timer first (or tap a species).');
   if (!C.finished && !confirm(`The ${S.settings.duration} minutes aren't up yet. Save the count now?`)) return;
+  const miss = condMissing(C.cond);
+  if (miss.length && !confirm(`Conditions not filled in: ${miss.join(', ')}. Save anyway?`)) { renderCond(true); return; }
   const p = C.point, start = C.startedAt;
   const minutes = C.finished ? +S.settings.duration : Math.max(1, Math.round((Date.now() - start) / 60000));
   S.counts.push({
@@ -764,6 +837,8 @@ $('saveCountBtn').onclick = () => {
     gps: C.gps ? { lat: +C.gps.lat.toFixed(6), lng: +C.gps.lng.toFixed(6), acc: Math.round(C.gps.acc) } : null,
     items: C.order.filter(s => C.items[s.name] > 0).map(s => ({ name: s.name, sci: s.sci || '', n: C.items[s.name] })),
     ...(p.moved ? { planned: { ...p.planned } } : {}),
+    ...(() => { const st = stationOf(p), g = nztm(p.lat, p.lng); return { line: st.line, station: st.station, nztm_e: g.e, nztm_n: g.n }; })(),
+    cond: { ...C.cond },
     app: VERSION,
   });
   if (!persist()) { S.counts.pop(); return; }      // not stored: keep the count open (and its saved copy) rather than lose it
@@ -914,7 +989,7 @@ function exportEbird() {
       const [genus, ...sp] = (x.sci || '').split(' ');
       if (!x.sci) unmatched.add(x.name);
       rows.push([x.name, genus || '', sp.join(' '), x.n, '', `${c.survey} ${c.point}`.trim(), c.lat.toFixed(6), c.lng.toFixed(6), `${m}/${d}/${y}`, c.start, '', 'NZ', 'Stationary', 1, c.minutes, 'Y', '', '',
-        `Loop: ${c.loop}. Point ${c.point}. ${c.minutes}-minute bird count (seen or heard).${c.observer ? ' Observer: ' + c.observer + '.' : ''}`]);
+        `Loop: ${c.loop}. Point ${c.point}. ${c.minutes}-minute bird count (seen or heard).${c.observer ? ' Observer: ' + c.observer + '.' : ''}${c.cond && Object.keys(c.cond).length ? ' Conditions: ' + condText(c.cond) + '.' : ''}`]);
     });
   });
   saveFile(`${fileStem()}-ebird-${cs[0].date}.csv`, toCsv(rows), 'text/csv');   // not counted as a backup: it leaves out empty counts
@@ -997,10 +1072,16 @@ async function ghPut(path, text, message) {
   throw new Error('GitHub kept refusing the update.');
 }
 function mineRows(cs) {
-  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id', 'planned_lat', 'planned_lon']];
+  const rows = [['survey', 'loop', 'point', 'date', 'start_time', 'duration_min', 'observer', 'point_lat', 'point_lon', 'gps_lat', 'gps_lon', 'gps_accuracy_m', 'species', 'scientific_name', 'count', 'count_id', 'planned_lat', 'planned_lon', 'line_number', 'station_number', 'nztm_e', 'nztm_n', 'temperature', 'wind', 'other_noise', 'sun_min', 'precip_type', 'precip_value']];
   cs.forEach(c => (c.items.length ? c.items : [{ name: '(none recorded)', sci: '', n: 0 }]).forEach(x =>
-    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id, c.planned ? (+c.planned.lat).toFixed(6) : '', c.planned ? (+c.planned.lng).toFixed(6) : ''])));
+    rows.push([c.survey, c.loop, c.point, c.date, c.start, c.minutes, c.observer, c.lat.toFixed(6), c.lng.toFixed(6), c.gps?.lat ?? '', c.gps?.lng ?? '', c.gps?.acc ?? '', x.name, x.sci, x.n, c.id, c.planned ? (+c.planned.lat).toFixed(6) : '', c.planned ? (+c.planned.lng).toFixed(6) : '', ...countGrid(c), ...COND.map(f => c.cond?.[f.k] ?? '')])));
   return rows;
+}
+// line, station and grid ref of a saved count (counts saved before v0.6.0 work them out from the point)
+function countGrid(c) {
+  const st = c.line != null ? { line: c.line, station: c.station } : stationOf(S.survey.points.find(p => p.id === c.pointId) || { loop: c.loop, name: c.point });
+  const g = c.nztm_e != null ? { e: c.nztm_e, n: c.nztm_n } : nztm(c.lat, c.lng);
+  return [st.line, st.station, g.e, g.n];
 }
 function movesRows() {
   return [['survey', 'loop', 'point', 'planned_lat', 'planned_lon', 'new_lat', 'new_lon', 'gps_accuracy_m', 'moved_from_planned_m', 'moved_at', 'observer']]
