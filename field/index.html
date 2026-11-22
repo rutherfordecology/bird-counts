@@ -200,6 +200,8 @@
       </div>
       <label class="f"><input type="checkbox" id="keepAwake"> keep the screen on while the app is open</label>
       <label class="f"><input type="checkbox" id="sound"> beep as well as vibrate</label>
+      <label class="f app-only" hidden><input type="checkbox" id="bgAlerts"> alert with the screen off too (keeps GPS on, so uses more battery)</label>
+      <div class="muted app-only" id="bgStatus" hidden style="margin-top:4px"></div>
       <div class="row" style="margin-top:10px"><button id="testAlertBtn">Test alert</button></div>
     </div>
     <div class="card">
@@ -267,8 +269,12 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 const $ = id => document.getElementById(id);
+// Inside the Android app (android/), the app's bridge: native vibration, saving files,
+// and the service that alerts with the screen off. Null in a browser.
+const HOST = window.BirdHost || null;
+const buzz = p => { p = [].concat(p); if (HOST) HOST.vibrate(p.join(',')); else navigator.vibrate?.(p); };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---------- state (kept on this phone) ----------
@@ -277,7 +283,7 @@ let S = {
   survey: { name: '', points: [] },      // points: { id, loop, name, lat, lng, order }
   counts: [],                            // see saveCount()
   extraSpecies: [],                      // names added through "Other", kept for next time
-  settings: { observer: '', duration: 5, radius: 25, keepAwake: true, sound: true },
+  settings: { observer: '', duration: 5, radius: 25, keepAwake: true, sound: true, bgAlerts: true },
   loop: '',
 };
 function load() { try { const s = JSON.parse(localStorage.getItem(KEY)); if (s) S = { ...S, ...s, settings: { ...S.settings, ...(s.settings || {}) } }; } catch (e) {} }
@@ -393,16 +399,28 @@ $('pointsFile').onchange = async () => {
 };
 
 // Built-in sites (field/sites/index.json): ready to use with nothing to load
-let SITES = [];
+// The Android app carries a copy of the sites from when it was built, so it asks the live site
+// (where the planner saves) first, and uses its own copy only when there's no signal.
+let SITES = [], SITE_BASE = '';
+const LIVE_SITES = 'https://rutherfordecology.github.io/bird-counts/field/';
+const siteUrl = s => new URL(s.file, SITE_BASE || location.href).href;
 async function loadSiteList() {
-  try { SITES = await (await fetch('sites/index.json')).json(); } catch (e) { SITES = []; }
+  SITES = [];
+  for (const base of HOST ? [LIVE_SITES, ''] : ['']) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const r = await fetch(base + 'sites/index.json', { cache: 'no-cache', signal: ctl.signal });
+      if (r.ok) { SITES = await r.json(); SITE_BASE = base; break; }
+    } catch (e) { /* no signal: try the next */ }
+    finally { clearTimeout(t); }
+  }
   $('siteSel').innerHTML = SITES.map(s => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(s.about)}</option>`).join('') || '<option>None</option>';
   $('siteLoadBtn').disabled = !SITES.length;
 }
 async function loadBuiltIn(id, ask = true) {
   const s = SITES.find(x => x.id === id); if (!s) return;
   if (ask && S.survey.points.length && !confirm(`Switch to ${s.name}? Counts already recorded are kept.`)) return;
-  try { useSurvey(parsePoints(await (await fetch(s.file)).text(), s.file), 'built-in:' + s.id); }
+  try { useSurvey(parsePoints(await (await fetch(siteUrl(s))).text(), s.file), 'built-in:' + s.id); }
   catch (e) { alert('Could not load ' + s.name + ': ' + e.message); }
 }
 $('siteLoadBtn').onclick = () => loadBuiltIn($('siteSel').value);
@@ -415,7 +433,7 @@ async function refreshBuiltIn() {
   try {
     await loadSiteList();
     const s = SITES.find(x => x.id === id); if (!s) return;
-    const r = await fetch(s.file, { cache: 'no-cache' }); if (!r.ok) return;
+    const r = await fetch(siteUrl(s), { cache: 'no-cache' }); if (!r.ok) return;
     const got = parsePoints(await r.text(), s.file);
     if (C || !got.pts.length) return;
     const key = p => `${p.loop}|${p.name}`, pos = p => `${(+p.lat).toFixed(6)},${(+p.lng).toFixed(6)}`;
@@ -590,14 +608,20 @@ function checkArrival() {
     if (d > r * 2) alerted.delete(p.id);                    // walked away: may alert again
     if (d <= r && !alerted.has(p.id) && !countedToday(p) && (!hit || d < dist(me, hit))) hit = p;
   });
-  if (hit && !countView.classList.contains('show')) {
-    alerted.add(hit.id);
-    target = hit;
-    $('arrivalPt').textContent = hit.name + (hit.loop !== S.loop ? ` (${hit.loop})` : '');
-    $('arrival').classList.remove('show'); void $('arrival').offsetWidth; $('arrival').classList.add('show');
-    alertUser('arrive');
-  }
+  if (hit && !countView.classList.contains('show')) { showArrival(hit); alertUser('arrive'); }
 }
+function showArrival(p) {
+  alerted.add(p.id);
+  target = p;
+  $('arrivalPt').textContent = p.name + (p.loop !== S.loop ? ` (${p.loop})` : '');
+  $('arrival').classList.remove('show'); void $('arrival').offsetWidth; $('arrival').classList.add('show');
+}
+// The app's alert service buzzed for this point while the screen was off: show its banner, no second buzz.
+window.BirdArrived = id => {
+  const p = S.survey.points.find(x => x.id === id);
+  if (!p || C || countedToday(p)) return;
+  showView('mapView'); showArrival(p); updateNav();
+};
 $('arrivalStart').onclick = () => { $('arrival').classList.remove('show'); openCount(target); };
 $('arrival').addEventListener('click', e => { if (e.target === $('arrival')) $('arrival').classList.remove('show'); });
 $('countHereBtn').onclick = async () => {
@@ -624,14 +648,52 @@ function beep(freqs) {
     g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.5, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + .25); o.start(t); o.stop(t + .27); t += .3; });
 }
 function alertUser(kind) {
-  if (kind === 'arrive') { navigator.vibrate?.([400, 150, 400, 150, 400]); beep([880, 1175, 1568]); }
-  if (kind === 'done') { navigator.vibrate?.([800, 200, 800]); beep([1568, 1175, 880, 1568]); }
+  if (kind === 'arrive') { buzz([400, 150, 400, 150, 400]); beep([880, 1175, 1568]); }
+  if (kind === 'done') { buzz([800, 200, 800]); beep([1568, 1175, 880, 1568]); }
 }
+
+// ---------- Android app: alerts with the screen off ----------
+// Tells the app what to watch for. Its service keeps GPS on, buzzes on arrival at a point
+// not yet counted today, and when a running count's time is up. It stays quiet while the
+// app is on screen, because this page alerts then.
+function toHost() {
+  if (!HOST) return;
+  try {
+    HOST.update(JSON.stringify({
+      on: !!S.settings.bgAlerts, radius: +S.settings.radius || 25, sound: !!S.settings.sound,
+      points: S.survey.points.filter(p => !countedToday(p)).map(p => ({ id: p.id, name: p.name, loop: p.loop, lat: p.lat, lng: p.lng })),
+      countOpen: !!C, countEndsAt: C && C.startedAt && !C.finished ? C.endsAt : 0, countPoint: C ? C.point.name : '',
+    }));
+  } catch (e) {}
+  setTimeout(showBgStatus, 800);
+}
+function showBgStatus() {
+  const el = $('bgStatus'); if (!HOST || !el) return;
+  const st = HOST.alertStatus();
+  const fix = ' <button id="bgFixBtn">Open app settings</button>';
+  el.innerHTML = !S.settings.bgAlerts ? 'Off: alerts only while the screen is on.'
+    : st === 'no-location' ? '⚠ Location is off for this app, so there are no alerts.' + fix
+    : st === 'no-notifications' ? '⚠ Notifications are blocked, so alerts can\'t come through with the screen off.' + fix
+    : st === 'on' ? '✓ On. GPS stays on while there are points left today, and a notification shows while it runs. Swipe the app away or tap Stop on that notification to turn it off until you next open the app.'
+    : 'Waiting: it starts when there are points left to count today.';
+  const b = $('bgFixBtn'); if (b) b.onclick = () => HOST.openAppSettings();
+}
+window.BirdStatus = showBgStatus;
+// Android back button: close what's open, then go back to the map, then leave the app.
+window.BirdBack = () => {
+  if ($('sheet').classList.contains('show')) { $('sheet').onclick({ target: $('sheet') }); return true; }
+  if ($('otherDlg').classList.contains('show')) { $('otherDlg').classList.remove('show'); return true; }
+  if (C) { toast('Save or discard the count first.'); return true; }
+  if ($('arrival').classList.contains('show')) { $('arrival').classList.remove('show'); return true; }
+  if (!$('mapView').classList.contains('active')) { showView('mapView'); return true; }
+  return false;
+};
 $('testAlertBtn').onclick = () => { alertUser('arrive'); toast('That is the arrival alert.'); };
 
 // keep the screen on (needs the page visible; re-requested when you come back to it)
 let wakeLock = null;
 async function keepAwake() {
+  if (HOST) return HOST.keepScreenOn(!!S.settings.keepAwake);
   if (!S.settings.keepAwake || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
   try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
 }
@@ -695,7 +757,7 @@ function resumeCurrent() {
     } else { $('countHead').className = 'running'; tick = setInterval(updateTimer, 250); updateTimer(); }
   }
   renderCond(!s.startedAt); showCountMeta();
-  renderSpecies();
+  renderSpecies(); toHost();
   toast(`Your unsaved count at ${p.name} is back, as you left it.`, 5000);
   return true;
 }
@@ -769,7 +831,7 @@ function openCount(p, restoring = false) {
   renderSpecies();
   $('spList').scrollTop = 0;
   keepAwake();
-  if (!restoring) saveCurrent();
+  if (!restoring) { saveCurrent(); toHost(); }
 }
 function renderSpecies() {
   const total = Object.values(C.items).reduce((a, b) => a + b, 0), spp = Object.values(C.items).filter(n => n > 0).length;
@@ -788,7 +850,7 @@ $('spList').addEventListener('click', e => {
   const s = C.order[+row.dataset.i], minus = e.target.dataset.act === '-';
   C.items[s.name] = Math.max(0, (C.items[s.name] || 0) + (minus ? -1 : 1));
   if (!minus && !C.startedAt) startTimer();       // the first bird starts the clock if you forgot
-  navigator.vibrate?.(minus ? 15 : 30);
+  buzz(minus ? 15 : 30);
   saveCurrent();
   renderSpecies();
 });
@@ -799,7 +861,7 @@ function startTimer() {
   $('countHead').className = 'running';
   $('timerBtn').style.display = 'none';
   renderCond(false); showCountMeta();
-  saveCurrent();
+  saveCurrent(); toHost();
   tick = setInterval(updateTimer, 250); updateTimer();
 }
 function updateTimer() {
@@ -810,7 +872,7 @@ function updateTimer() {
     $('countHead').className = 'finished';
     $('timer').textContent = 'Done';
     $('timerBtn').textContent = 'Edit'; $('timerBtn').style.display = '';
-    alertUser('done'); saveCurrent(); renderSpecies();
+    alertUser('done'); saveCurrent(); renderSpecies(); toHost();
   }
 }
 $('timerBtn').onclick = () => {
@@ -853,7 +915,7 @@ $('saveCountBtn').onclick = () => {
     if (confirm(`${S.loop} is done. Save a backup of today's counts off the phone now? (Share it to Drive, email or Files.)`)) backupNow();
   }, 400);
 };
-function closeCount() { clearInterval(tick); C = null; countView.classList.remove('show'); }
+function closeCount() { clearInterval(tick); C = null; countView.classList.remove('show'); toHost(); }
 
 // "Other": search eBird's full list (English NZ names) or keep exactly what you typed
 $('otherBtn').onclick = () => { $('otherDlg').classList.add('show'); $('otherSearch').value = ''; renderOther(); setTimeout(() => $('otherSearch').focus(), 50); };
@@ -999,6 +1061,10 @@ function exportEbird() {
 }
 // Share sheet on phones (Drive, email, Files…), download elsewhere. Returns false if you cancelled.
 async function saveFile(name, text, type) {
+  if (HOST) return new Promise(res => {      // the app asks: Save to Downloads, or Share
+    window.BirdSaved = ok => { window.BirdSaved = null; if (!ok) toast('Not saved.'); res(!!ok); };
+    HOST.saveFile(name, text, type || 'text/plain');
+  });
   const file = new File([text], name, { type });
   if (navigator.canShare?.({ files: [file] })) {
     try { await navigator.share({ files: [file], title: name }); return true; }
@@ -1202,10 +1268,12 @@ $('dlLoopBtn').onclick = () => downloadTiles(loopPoints());
 function bindSetting(id, key, kind = 'value') {
   const el = $(id);
   el[kind === 'checked' ? 'checked' : 'value'] = S.settings[key];
-  el.addEventListener('change', () => { S.settings[key] = kind === 'checked' ? el.checked : el.type === 'number' ? +el.value : el.value; persist(); if (key === 'keepAwake') keepAwake(); });
+  el.addEventListener('change', () => { S.settings[key] = kind === 'checked' ? el.checked : el.type === 'number' ? +el.value : el.value; persist(); if (key === 'keepAwake') keepAwake(); toHost(); });
 }
 bindSetting('observer', 'observer'); bindSetting('duration', 'duration'); bindSetting('radius', 'radius');
 bindSetting('keepAwake', 'keepAwake', 'checked'); bindSetting('sound', 'sound', 'checked');
+bindSetting('bgAlerts', 'bgAlerts', 'checked');
+if (HOST) document.querySelectorAll('.app-only').forEach(el => el.hidden = false);
 $('surveyName').value = S.survey.name;
 $('surveyName').addEventListener('change', () => { S.survey.name = $('surveyName').value.trim(); persist(); refreshLoopSel(); });
 
@@ -1216,6 +1284,7 @@ function showView(id) {
   if (id === 'mapView') setTimeout(() => map.invalidateSize(), 50);
   if (id === 'pointsView') renderPoints();
   if (id === 'dataView') renderData();
+  if (id === 'setupView') showBgStatus();
 }
 document.querySelector('nav').addEventListener('click', e => { if (e.target.dataset.view) showView(e.target.dataset.view); });
 
@@ -1226,8 +1295,9 @@ function refreshAll() {
   const ls = loops();
   $('surveyInfo').textContent = S.survey.points.length ? `${S.survey.name || 'Survey'}: ${S.survey.points.length} points in ${ls.length} loop${ls.length === 1 ? '' : 's'} (${ls.join(', ')}).` : 'No points loaded.';
   $('surveyName').value = S.survey.name;
+  toHost();
 }
-$('aboutInfo').textContent = `Bird Count Field v${VERSION}. Species order: ${SPECIES_LOCAL.source}. "Other" searches eBird's full list (${SPECIES_ALL.length.toLocaleString()} names). Everything is stored on this phone${GH.token ? `, and copied to GitHub (${GH.repo})` : ' only'}.`;
+$('aboutInfo').textContent = `Bird Count Field v${VERSION}${HOST ? ' (Android app)' : ''}. Species order: ${SPECIES_LOCAL.source}. "Other" searches eBird's full list (${SPECIES_ALL.length.toLocaleString()} names). Everything is stored on this phone${GH.token ? `, and copied to GitHub (${GH.repo})` : ' only'}.`;
 
 refreshAll(); fitLoop(); startGps(); keepAwake();
 // first run: start with the first built-in site so there's nothing to load

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The target and bird from field/icon.svg (512-unit viewport), scaled to sit
+     inside the 66dp safe zone of the 108dp adaptive canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="2.8" android:translateY="2.8" android:scaleX="0.2" android:scaleY="0.2">
+        <path android:strokeColor="#E0592A" android:strokeWidth="22"
+            android:pathData="M106,256a150,150 0 1,0 300,0a150,150 0 1,0 -300,0z" />
+        <path android:fillColor="#E0592A"
+            android:pathData="M230,256a26,26 0 1,0 52,0a26,26 0 1,0 -52,0z" />
+        <path android:fillColor="#F4F3EE"
+            android:pathData="M170,300c40,-70 110,-96 176,-80c-20,14 -34,32 -40,54c26,-8 48,-6 66,4c-40,6 -70,24 -92,52c-46,6 -82,-4 -110,-30z" />
+    </group>
+</vector>

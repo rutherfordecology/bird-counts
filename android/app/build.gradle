@@ -1,0 +1,71 @@
+plugins {
+    id 'com.android.application'
+}
+
+/**
+ * The version lives in one place: VERSION in field/index.html, so the APK
+ * cannot claim a different version from the page it carries.
+ * '0.7.0' gives versionCode 700.
+ */
+def appVersionName = {
+    def text = rootProject.file('../field/index.html').text
+    def m = text =~ /const VERSION = '([^']+)'/
+    if (!m) throw new GradleException('Could not read VERSION from field/index.html')
+    return m[0][1]
+}()
+
+def appVersionCode = {
+    def p = appVersionName.tokenize('.').collect { it.toInteger() }
+    while (p.size() < 3) p << 0
+    return p[0] * 10000 + p[1] * 100 + p[2]
+}()
+
+android {
+    namespace 'nz.birdcounts'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "nz.birdcounts.field"
+        minSdk 26
+        targetSdk 37
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // WebViewAssetLoader: serves the page from a real https origin.
+    implementation 'androidx.webkit:webkit:1.10.0'
+    // FileProvider (sharing exports) and NotificationCompat.
+    implementation 'androidx.core:core:1.12.0'
+}
+
+/**
+ * Copies the field app as it is now into assets at build time, plus the
+ * vendored Leaflet, so the APK never ships a stale page and opens with no
+ * signal on first run.
+ */
+tasks.register('copyPage', Copy) {
+    into 'src/main/assets'
+    from(rootProject.file('../field')) {
+        include 'index.html', 'species.js', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'sites/**'
+    }
+    from(rootProject.file('vendor/leaflet')) {
+        into 'vendor/leaflet'
+    }
+}
+
+tasks.named('preBuild') {
+    dependsOn 'copyPage'
+}

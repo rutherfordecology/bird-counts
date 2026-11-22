@@ -1,5 +1,11 @@
 # Bird Count Field — changelog
 
+## v0.7.0 — 2026-11-22
+- Android app (`android/`, APK). It's the same page as the web app, plus **alerts with the screen off**. A background service keeps GPS on and buzzes (and beeps, if that's on in Setup) when you reach a point not yet counted today. It also alerts when a running count's time is up. A notification shows while it runs, with the nearest point still to count. It stays quiet while the app is on screen, because the page alerts then. Tapping the alert opens the app on that point's banner.
+- The service stops when nothing is left to count today, when you tap Stop on its notification, or when you swipe the app away. It starts again when you open the app. It can be turned off in Setup → Counting, which also shows whether it's running and flags missing location or notification permission.
+- The app shows the planner's live site list when there's signal, and the copy it was built with when there isn't. Leaflet is built in, so the map works the first time it opens, even with no signal. Exports offer Save to Downloads or Share. The back button closes dialogs, then returns to the map.
+- Web app: no change in behaviour. The service worker now fetches the live site files network-first when the Android app asks for them.
+
 ## v0.6.0 — 2026-11-12
 - Count conditions, as on the 5-minute bird count sheet: temperature (1–6), wind (0–3), other noise (0–2), sun (minutes, 0–5), precipitation type (N, M, R, H, S) and value (0–5). They're big buttons at the top of the count screen, open before you start the timer, then folded into one line you can tap to change (e.g. to add sun minutes at the end). Each count starts with the last count's conditions that day, except sun. Saving asks first if any are missing.
 - The count screen shows line number, station number and the NZTM grid reference (7-digit easting and northing), worked out from the point's position, plus the start time once the timer runs.

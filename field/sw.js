@@ -1,7 +1,7 @@
 // Bird Count Field: works offline.
 // - App files and libraries: cached on install, served cache-first.
 // - Map tiles: served from the offline cache when present (downloaded from Setup, or seen before).
-const APP = 'bc-app-v0.6.0';
+const APP = 'bc-app-v0.7.0';
 const TILES = 'bc-tiles-v1';
 const APP_FILES = [
   './', './index.html', './species.js', './manifest.webmanifest', './icon.svg',
@@ -45,7 +45,8 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     const cache = await caches.open(APP);
     const hit = await cache.match(e.request, { ignoreSearch: true });
-    const own = url.startsWith(self.location.origin);
+    // Our own files, and (in the Android app) the live sites the planner saves: network first.
+    const own = url.startsWith(self.location.origin) || url.startsWith('https://rutherfordecology.github.io/bird-counts/field/');
     if (hit && !own) return hit;
     const net = fetch(e.request).then(r => { if (r.ok) cache.put(e.request, r.clone()); return r; }).catch(() => null);
     const timeout = new Promise(res => setTimeout(() => res(null), hit ? 3000 : 30000));

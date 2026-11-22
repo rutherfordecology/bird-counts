@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Exports written by the page, shared out through FileProvider. -->
+    <files-path name="exports" path="exports/" />
+</paths>
