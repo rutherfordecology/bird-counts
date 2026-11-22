@@ -279,7 +279,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.7.5';
+const VERSION = '0.7.6';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
@@ -805,12 +805,12 @@ const COND = [
 const condMeaning = (f, v) => f.long[f.vals.indexOf(v)] ?? '';
 const condText = c => COND.map(f => c?.[f.k] == null ? `${f.label} –` : `${f.label} ${c[f.k]} (${condMeaning(f, c[f.k])})`).join(' · ');
 const condMissing = c => COND.filter(f => c?.[f.k] == null).map(f => f.label);
-// Each condition starts at its value from the last count that recorded it, whatever day.
-// Not sun: that's minutes of sun during that one count, so it's filled in fresh each time.
+// Each condition, sun included, starts at its value from the last count that recorded it, whatever
+// day, so tapping Done on unchanged conditions counts them as filled in.
 function lastCond() {
   const out = {};
   [...S.counts].filter(c => c.cond).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))
-    .forEach(c => COND.forEach(f => { if (f.k !== 'sun' && c.cond[f.k] != null) out[f.k] = c.cond[f.k]; }));
+    .forEach(c => COND.forEach(f => { if (c.cond[f.k] != null) out[f.k] = c.cond[f.k]; }));
   return out;
 }
 // Conditions live in a sheet opened from the Conditions button, so the bird list keeps the screen.

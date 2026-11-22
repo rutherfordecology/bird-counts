@@ -1,5 +1,8 @@
 # Bird Count Field — changelog
 
+## v0.7.6 — 2026-11-22
+- Sun now carries over from the last count like the other conditions. Before, it was always left blank, so after tapping Done on unchanged conditions the button still showed ⚠ and Save still said Sun was missing. Change it in the sheet if the sun was different.
+
 ## v0.7.5 — 2026-11-22
 - Species rows tighter again: about 36 px, with species names at 15 px. About 15 species fit on a phone screen.
 
