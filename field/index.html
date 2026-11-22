@@ -91,8 +91,10 @@
   #countMeta { font-size: 13px; opacity: .9; margin-top: 2px; }
   #condBox { margin-top: 8px; }
   #condBox .cr { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
-  #condBox .cl { width: 86px; font-size: 13px; line-height: 1.1; flex: none; }
-  #condBox .cb { flex: 1; padding: 8px 0; min-width: 0; border-radius: 8px; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); font-weight: 700; }
+  #condBox .cl { width: 78px; font-size: 13px; line-height: 1.1; flex: none; }
+  #condBox .cl small { display: block; font-size: 10px; opacity: .8; }
+  #condBox .cb { flex: 1; padding: 4px 0 3px; min-width: 0; border-radius: 8px; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); font-weight: 700; line-height: 1.1; }
+  #condBox .cb small { display: block; font-size: 10px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: clip; opacity: .9; }
   #condBox .cb.on { background: #fff; color: var(--accent); border-color: #fff; }
   #condBox.closed .cr { display: none; }
   #condSum { width: 100%; text-align: left; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); padding: 8px 10px; font-size: 14px; }
@@ -269,7 +271,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.7.0';
+const VERSION = '0.7.2';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
@@ -522,9 +524,28 @@ const TILES = {
   topo: { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom: 17, attribution: '© OpenTopoMap, © OpenStreetMap contributors' },
 };
 const bases = {
-  'Aerial': L.tileLayer(TILES.aerial.url, { maxZoom: 19, maxNativeZoom: 19, crossOrigin: true, attribution: TILES.aerial.attribution }),
-  'Topo': L.tileLayer(TILES.topo.url, { maxZoom: 19, maxNativeZoom: 17, crossOrigin: true, attribution: TILES.topo.attribution }),
+  'Aerial': L.tileLayer(TILES.aerial.url, { maxZoom: 21, maxNativeZoom: 19, crossOrigin: true, attribution: TILES.aerial.attribution }),
+  'Topo': L.tileLayer(TILES.topo.url, { maxZoom: 21, maxNativeZoom: 17, crossOrigin: true, attribution: TILES.topo.attribution }),
 };
+// A tile that can't be had (offline beyond the downloaded zooms, or no imagery that deep) is
+// drawn from the nearest coarser tile there is, enlarged, so zooming in never goes blank.
+const urlAt = (layer, z, x, y) => L.Util.template(layer._url, { s: 'a', z, x, y, r: '' });
+Object.values(bases).forEach(layer => layer.on('tileerror', e => {
+  const tile = e.tile, { x, y, z } = e.coords;
+  if (tile._fromParent) return; tile._fromParent = true;
+  (async () => {
+    for (let up = 1; up <= 6 && z - up >= 0; up++) {
+      const k = 2 ** up, img = new Image(); img.crossOrigin = 'anonymous';
+      const ok = await new Promise(r => { img.onload = () => r(true); img.onerror = () => r(false); img.src = urlAt(layer, z - up, Math.floor(x / k), Math.floor(y / k)); });
+      if (!ok) continue;
+      const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+      const s = img.naturalWidth / k, ctx = cv.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, (x % k) * s, (y % k) * s, s, s, 0, 0, 256, 256);
+      try { tile.src = cv.toDataURL('image/jpeg', .9); } catch (err) {}
+      return;
+    }
+  })();
+}));
 bases.Aerial.addTo(map);
 L.control.layers(bases, null, { position: 'topright' }).addTo(map);
 L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
@@ -763,27 +784,40 @@ function resumeCurrent() {
 }
 
 // ---------- count conditions (as on the 5-minute bird count sheet) ----------
+// Codes and meanings from the back of the DOC five-minute bird count notebook form.
+// short: under the button; long: in the summary line and the eBird comments.
 const COND = [
-  { k: 'temp', label: 'Temperature', vals: ['1', '2', '3', '4', '5', '6'] },
-  { k: 'wind', label: 'Wind', vals: ['0', '1', '2', '3'] },
-  { k: 'noise', label: 'Other noise', vals: ['0', '1', '2'] },
-  { k: 'sun', label: 'Sun (min)', vals: ['0', '1', '2', '3', '4', '5'] },
-  { k: 'ptype', label: 'Precip type', vals: ['N', 'M', 'R', 'H', 'S'] },
-  { k: 'pval', label: 'Precip value', vals: ['0', '1', '2', '3', '4', '5'] },
+  { k: 'temp', label: 'Temperature', hint: '°C', vals: ['1', '2', '3', '4', '5', '6'],
+    short: ['<0°', '0–5°', '6–10°', '11–15°', '16–22°', '>22°'],
+    long: ['freezing <0 °C', 'cold 0–5 °C', 'cool 6–10 °C', 'mild 11–15 °C', 'warm 16–22 °C', 'hot >22 °C'] },
+  { k: 'wind', label: 'Wind', hint: 'average', vals: ['0', '1', '2', '3'],
+    short: ['still', 'rustle', 'moving', 'sway'],
+    long: ['leaves still or silent', 'leaves rustle', 'leaves and branches moving', 'branches or trees sway'] },
+  { k: 'noise', label: 'Other noise', hint: 'not wind', vals: ['0', '1', '2'],
+    short: ['none', 'moderate', 'loud'], long: ['not important', 'moderate', 'loud'] },
+  { k: 'sun', label: 'Sun', hint: 'minutes on canopy overhead', vals: ['0', '1', '2', '3', '4', '5'],
+    short: ['min', 'min', 'min', 'min', 'min', 'min'], long: ['0 min', '1 min', '2 min', '3 min', '4 min', '5 min'] },
+  { k: 'ptype', label: 'Precip type', vals: ['N', 'M', 'R', 'H', 'S'],
+    short: ['none', 'mist', 'rain', 'hail', 'snow'], long: ['none', 'mist', 'rain', 'hail', 'snow'] },
+  { k: 'pval', label: 'Precip amount', vals: ['0', '1', '2', '3', '4', '5'],
+    short: ['none', 'drips', 'drizzle', 'light', 'mod.', 'heavy'],
+    long: ['none', 'dripping foliage', 'drizzle', 'light', 'moderate', 'heavy'] },
 ];
-const condText = c => COND.map(f => `${f.label.replace(' (min)', '')} ${c?.[f.k] ?? '–'}`).join(' · ');
+const condMeaning = (f, v) => f.long[f.vals.indexOf(v)] ?? '';
+const condText = c => COND.map(f => c?.[f.k] == null ? `${f.label} –` : `${f.label} ${c[f.k]} (${condMeaning(f, c[f.k])})`).join(' · ');
 const condMissing = c => COND.filter(f => c?.[f.k] == null).map(f => f.label);
-// start from the last count today: conditions rarely change much between points
+// Each condition starts at its value from the last count that recorded it, whatever day.
+// Not sun: that's minutes of sun during that one count, so it's filled in fresh each time.
 function lastCond() {
-  const t = S.counts.filter(c => c.date === today() && c.cond).sort((a, b) => a.start.localeCompare(b.start)).pop();
-  if (!t) return {};
-  const { sun, ...rest } = t.cond;   // sun is minutes of sun during that count: fill it in fresh each time
-  return rest;
+  const out = {};
+  [...S.counts].filter(c => c.cond).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))
+    .forEach(c => COND.forEach(f => { if (f.k !== 'sun' && c.cond[f.k] != null) out[f.k] = c.cond[f.k]; }));
+  return out;
 }
 function renderCond(open) {
   const box = $('condBox');
   if (open != null) box.classList.toggle('closed', !open);
-  $('condRows').innerHTML = COND.map(f => `<div class="cr"><span class="cl">${f.label}</span>${f.vals.map(v => `<button class="cb${C.cond[f.k] === v ? ' on' : ''}" data-ck="${f.k}" data-cv="${v}">${v}</button>`).join('')}</div>`).join('');
+  $('condRows').innerHTML = COND.map(f => `<div class="cr"><span class="cl">${f.label}${f.hint ? `<small>${f.hint}</small>` : ''}</span>${f.vals.map((v, i) => `<button class="cb${C.cond[f.k] === v ? ' on' : ''}" data-ck="${f.k}" data-cv="${v}" title="${esc(f.long[i])}">${v}<small>${f.short[i]}</small></button>`).join('')}</div>`).join('');
   const miss = condMissing(C.cond);
   $('condSum').textContent = (box.classList.contains('closed') ? '✎ ' : '▾ ') + (miss.length === COND.length ? 'Conditions: tap to fill in' : condText(C.cond)) + (miss.length && miss.length < COND.length ? ` (missing: ${miss.join(', ')})` : '');
   $('condSum').classList.toggle('missing', miss.length > 0);
@@ -827,6 +861,7 @@ function openCount(p, restoring = false) {
   $('timerBtn').style.display = '';
   $('timer').textContent = `${S.settings.duration}:00`;
   countView.classList.add('show');
+  $('arrival').classList.remove('show');     // an old "You're at" banner mustn't outlive the count
   renderCond(true); showCountMeta();
   renderSpecies();
   $('spList').scrollTop = 0;
@@ -1215,7 +1250,7 @@ $('ghForgetBtn').onclick = () => {
 // ---------- offline map download ----------
 const lon2x = (lng, z) => Math.floor((lng + 180) / 360 * 2 ** z);
 const lat2y = (lat, z) => Math.floor((1 - Math.log(Math.tan(rad(lat)) + 1 / Math.cos(rad(lat))) / Math.PI) / 2 * 2 ** z);
-// Tiles within `buf` metres of any point: zoom 12-14 across the whole area, 15-17 only near the points.
+// Tiles within `buf` metres of any point: zoom 10-14 across the whole area, 15-18 only near the points.
 function tilesFor(pts, withTopo) {
   const out = new Set();
   const add = (z, lat0, lat1, lng0, lng1, near) => {
@@ -1233,6 +1268,7 @@ function tilesFor(pts, withTopo) {
   const [la0, la1, ln0, ln1] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lngs) - pad, Math.max(...lngs) + pad];
   for (let z = 10; z <= 14; z++) add(z, la0, la1, ln0, ln1, 0);
   for (let z = 15; z <= 17; z++) add(z, la0, la1, ln0, ln1, z === 17 ? 250 : 500);
+  add(18, la0, la1, ln0, ln1, 150);   // aerial only (topo stops at 17), close around each point
   return [...out];
 }
 const tileUrl = t => { const [k, z, x, y] = t.split('/'); return k === 'aerial' ? `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}` : `https://a.tile.opentopomap.org/${z}/${x}/${y}.png`; };

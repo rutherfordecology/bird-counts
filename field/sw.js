@@ -1,7 +1,7 @@
 // Bird Count Field: works offline.
 // - App files and libraries: cached on install, served cache-first.
 // - Map tiles: served from the offline cache when present (downloaded from Setup, or seen before).
-const APP = 'bc-app-v0.7.0';
+const APP = 'bc-app-v0.7.2';
 const TILES = 'bc-tiles-v1';
 const APP_FILES = [
   './', './index.html', './species.js', './manifest.webmanifest', './icon.svg',

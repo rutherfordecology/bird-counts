@@ -1,5 +1,14 @@
 # Bird Count Field — changelog
 
+## v0.7.2 — 2026-11-22
+- Count conditions say what they mean, from the back of the DOC 5MBC notebook form. Each button shows its meaning under the code (temperature 4 is "11–15°", wind 1 is "rustle", precip amount 1 is "drips"…). The summary line spells them out: "Temperature 4 (mild 11–15 °C) · Wind 1 (leaves rustle) …". The eBird comments do the same. "Precip value" is now labelled "Precip amount". The data columns still hold just the codes.
+- Each condition starts at its value from the last count that recorded it, on any day. Before, it only carried over within the same day. Sun is still filled in fresh each count, as it's minutes of sun during that count.
+- Opening a count clears any "You're at…" banner still showing from earlier.
+
+## v0.7.1 — 2026-11-22
+- Zoom in further: the map now goes to zoom 21 (it stopped at 19). Beyond the deepest imagery there is, the map enlarges the nearest coarser tile, so it never goes blank. That includes offline, past the zooms you downloaded.
+- The offline map download adds zoom 18 aerial within 150 m of each point (about 760 more tiles, ~20 MB, for Waimata). It stays sharp when you zoom in on a station. Tap Download again to fetch just the new tiles.
+
 ## v0.7.0 — 2026-11-22
 - Android app (`android/`, APK). It's the same page as the web app, plus **alerts with the screen off**. A background service keeps GPS on and buzzes (and beeps, if that's on in Setup) when you reach a point not yet counted today. It also alerts when a running count's time is up. A notification shows while it runs, with the nearest point still to count. It stays quiet while the app is on screen, because the page alerts then. Tapping the alert opens the app on that point's banner.
 - The service stops when nothing is left to count today, when you tap Stop on its notification, or when you swipe the app away. It starts again when you open the app. It can be turned off in Setup → Counting, which also shows whether it's running and flags missing location or notification permission.
