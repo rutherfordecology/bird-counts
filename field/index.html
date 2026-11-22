@@ -89,16 +89,18 @@
   #countHead.finished { background: var(--done); }
   #countSummary { font-size: 14px; opacity: .9; margin-top: 4px; }
   #countMeta { font-size: 13px; opacity: .9; margin-top: 2px; }
-  #condBox { margin-top: 8px; }
-  #condBox .cr { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+  #condBox { position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,.4); display: none; align-items: flex-end; }
+  #condBox.show { display: flex; }
+  #condBox .sheet { background: var(--accent); color: #fff; width: 100%; border-radius: 16px 16px 0 0; padding: 12px 12px calc(14px + env(safe-area-inset-bottom)); }
+  #condDone { background: #fff; color: var(--accent); border: 0; font-weight: 700; }
+  #condBox .cr { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
   #condBox .cl { width: 78px; font-size: 13px; line-height: 1.1; flex: none; }
   #condBox .cl small { display: block; font-size: 10px; opacity: .8; }
   #condBox .cb { flex: 1; padding: 4px 0 3px; min-width: 0; border-radius: 8px; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); font-weight: 700; line-height: 1.1; }
   #condBox .cb small { display: block; font-size: 10px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: clip; opacity: .9; }
   #condBox .cb.on { background: #fff; color: var(--accent); border-color: #fff; }
-  #condBox.closed .cr { display: none; }
-  #condSum { width: 100%; text-align: left; background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35); padding: 8px 10px; font-size: 14px; }
-  #condSum.missing { border-color: #ffd23f; }
+  #condSum { margin-top: 10px; font-size: 13px; opacity: .9; }
+  #condBtn.missing { border-color: var(--warn); color: var(--warn); font-weight: 700; }
   #spList { flex: 1; overflow: auto; padding-bottom: 8px; }
   .sp { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 56px; user-select: none; }
   .sp .minus { width: 52px; align-self: stretch; border: 0; border-radius: 0; font-size: 26px; color: var(--muted); background: none; padding: 0; }
@@ -247,7 +249,6 @@
       <div id="timer">5:00</div>
     </div>
     <div id="countMeta"></div>
-    <div id="condBox"><button id="condSum"></button><div id="condRows"></div></div>
     <div class="row" style="margin-top:8px">
       <button id="timerBtn">Start 5 min</button>
       <div id="countSummary" style="flex:1"></div>
@@ -256,10 +257,17 @@
   <div id="spList"></div>
   <div id="countFoot">
     <button id="otherBtn">Other…</button>
+    <button id="condBtn">Conditions</button>
     <button id="cancelCountBtn" class="danger">Cancel</button>
     <button id="saveCountBtn" class="primary">Save</button>
   </div>
 </div>
+
+<div id="condBox"><div class="sheet">
+  <div class="row"><b style="flex:1;font-size:18px">Conditions</b><button id="condDone">Done</button></div>
+  <div id="condRows"></div>
+  <div id="condSum"></div>
+</div></div>
 
 <div id="otherDlg"><div class="sheet">
   <div class="row"><input id="otherSearch" placeholder="Search any species, or type a name" autocomplete="off"><button id="otherClose">Close</button></div>
@@ -271,7 +279,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.7.2';
+const VERSION = '0.7.3';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
@@ -704,6 +712,7 @@ window.BirdStatus = showBgStatus;
 window.BirdBack = () => {
   if ($('sheet').classList.contains('show')) { $('sheet').onclick({ target: $('sheet') }); return true; }
   if ($('otherDlg').classList.contains('show')) { $('otherDlg').classList.remove('show'); return true; }
+  if ($('condBox').classList.contains('show')) { renderCond(false); return true; }
   if (C) { toast('Save or discard the count first.'); return true; }
   if ($('arrival').classList.contains('show')) { $('arrival').classList.remove('show'); return true; }
   if (!$('mapView').classList.contains('active')) { showView('mapView'); return true; }
@@ -730,16 +739,6 @@ function speciesFor(loop) {
   return ranked;
 }
 
-// "in 41% of counts on Line 1", or the overall rate when it wasn't recorded on this line
-function likelihoodText(s, loop) {
-  const key = (String(loop).match(/^Line\s*(\d+)$/i) || [])[1];
-  const pct = v => v >= 0.005 ? Math.round(v * 100) + '%' : '<1%';
-  if (key && SPECIES_LOCAL.countsByLoop[key]) {
-    const v = s.byLoop?.[key] || 0;
-    return v ? `${pct(v)} of past counts on ${loop}` : `not yet on ${loop} · ${pct(s.p)} overall`;
-  }
-  return `${pct(s.p)} of past counts`;
-}
 
 // ---------- the count ----------
 const countView = $('countView');
@@ -777,7 +776,7 @@ function resumeCurrent() {
       $('timerBtn').textContent = C.editing ? 'Lock' : 'Edit'; $('timerBtn').style.display = '';
     } else { $('countHead').className = 'running'; tick = setInterval(updateTimer, 250); updateTimer(); }
   }
-  renderCond(!s.startedAt); showCountMeta();
+  renderCond(false); showCountMeta();
   renderSpecies(); toHost();
   toast(`Your unsaved count at ${p.name} is back, as you left it.`, 5000);
   return true;
@@ -814,13 +813,15 @@ function lastCond() {
     .forEach(c => COND.forEach(f => { if (f.k !== 'sun' && c.cond[f.k] != null) out[f.k] = c.cond[f.k]; }));
   return out;
 }
+// Conditions live in a sheet opened from the Conditions button, so the bird list keeps the screen.
+// open: true shows the sheet, false hides it, left out just redraws.
 function renderCond(open) {
-  const box = $('condBox');
-  if (open != null) box.classList.toggle('closed', !open);
+  if (open != null) $('condBox').classList.toggle('show', open);
   $('condRows').innerHTML = COND.map(f => `<div class="cr"><span class="cl">${f.label}${f.hint ? `<small>${f.hint}</small>` : ''}</span>${f.vals.map((v, i) => `<button class="cb${C.cond[f.k] === v ? ' on' : ''}" data-ck="${f.k}" data-cv="${v}" title="${esc(f.long[i])}">${v}<small>${f.short[i]}</small></button>`).join('')}</div>`).join('');
   const miss = condMissing(C.cond);
-  $('condSum').textContent = (box.classList.contains('closed') ? '✎ ' : '▾ ') + (miss.length === COND.length ? 'Conditions: tap to fill in' : condText(C.cond)) + (miss.length && miss.length < COND.length ? ` (missing: ${miss.join(', ')})` : '');
-  $('condSum').classList.toggle('missing', miss.length > 0);
+  $('condSum').textContent = miss.length === COND.length ? 'Tap a value in each row.' : condText(C.cond);
+  $('condBtn').textContent = miss.length ? `Conditions ⚠` : 'Conditions ✓';
+  $('condBtn').classList.toggle('missing', miss.length > 0);
 }
 $('condRows').addEventListener('click', e => {
   const b = e.target.closest('button[data-ck]'); if (!b || !C) return;
@@ -828,7 +829,9 @@ $('condRows').addEventListener('click', e => {
   if (C.cond[b.dataset.ck] === undefined) delete C.cond[b.dataset.ck];
   renderCond(); saveCurrent();
 });
-$('condSum').onclick = () => renderCond($('condBox').classList.contains('closed'));
+$('condBtn').onclick = () => renderCond(true);
+$('condDone').onclick = () => renderCond(false);
+$('condBox').addEventListener('click', e => { if (e.target === $('condBox')) renderCond(false); });
 // line, station number and NZTM grid reference of a point
 function stationOf(p) {
   if (p.line != null && p.line !== '') return { line: p.line, station: p.num ?? p.name };
@@ -862,7 +865,8 @@ function openCount(p, restoring = false) {
   $('timer').textContent = `${S.settings.duration}:00`;
   countView.classList.add('show');
   $('arrival').classList.remove('show');     // an old "You're at" banner mustn't outlive the count
-  renderCond(true); showCountMeta();
+  renderCond(condMissing(C.cond).length === COND.length);   // pops up only when nothing carried over
+  showCountMeta();
   renderSpecies();
   $('spList').scrollTop = 0;
   keepAwake();
@@ -875,7 +879,7 @@ function renderSpecies() {
   $('spList').innerHTML = C.order.map((s, i) => {
     const n = C.items[s.name] || 0;
     return `<div class="sp${n ? ' has' : ''}" data-i="${i}"><button class="minus" data-act="-" aria-label="one less">−</button>
-      <div class="name">${esc(s.name)}<small>${s.extra ? 'added by you' : likelihoodText(s, C.point.loop)}</small></div>
+      <div class="name">${esc(s.name)}${s.extra ? '<small>added by you</small>' : ''}</div>
       <div class="n">${n}</div><button class="plus" data-act="+" aria-label="one more">+</button></div>`;
   }).join('');
 }
@@ -950,7 +954,7 @@ $('saveCountBtn').onclick = () => {
     if (confirm(`${S.loop} is done. Save a backup of today's counts off the phone now? (Share it to Drive, email or Files.)`)) backupNow();
   }, 400);
 };
-function closeCount() { clearInterval(tick); C = null; countView.classList.remove('show'); toHost(); }
+function closeCount() { clearInterval(tick); C = null; countView.classList.remove('show'); $('condBox').classList.remove('show'); toHost(); }
 
 // "Other": search eBird's full list (English NZ names) or keep exactly what you typed
 $('otherBtn').onclick = () => { $('otherDlg').classList.add('show'); $('otherSearch').value = ''; renderOther(); setTimeout(() => $('otherSearch').focus(), 50); };

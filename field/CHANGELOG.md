@@ -1,5 +1,9 @@
 # Bird Count Field — changelog
 
+## v0.7.3 — 2026-11-22
+- More birds on the count screen: about 10 rows on a phone, up from about 4. Conditions have moved out of the top of the screen into a sheet opened by the **Conditions** button in the bottom bar. The button shows ✓ when all are filled in and ⚠ when any are missing. The sheet only pops up by itself on a count with nothing carried over. Saving with some missing still asks first, then opens the sheet if you say no.
+- The "% of past counts" line under each species is gone. Species are still ordered by how often they turn up on that line. "Added by you" still shows.
+
 ## v0.7.2 — 2026-11-22
 - Count conditions say what they mean, from the back of the DOC 5MBC notebook form. Each button shows its meaning under the code (temperature 4 is "11–15°", wind 1 is "rustle", precip amount 1 is "drips"…). The summary line spells them out: "Temperature 4 (mild 11–15 °C) · Wind 1 (leaves rustle) …". The eBird comments do the same. "Precip value" is now labelled "Precip amount". The data columns still hold just the codes.
 - Each condition starts at its value from the last count that recorded it, on any day. Before, it only carried over within the same day. Sun is still filled in fresh each count, as it's minutes of sun during that count.
