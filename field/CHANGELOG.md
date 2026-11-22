@@ -1,5 +1,11 @@
 # Bird Count Field — changelog
 
+## v0.7.5 — 2026-11-22
+- Species rows tighter again: about 36 px, with species names at 15 px. About 15 species fit on a phone screen.
+
+## v0.7.4 — 2026-11-22
+- Slimmer species rows (40 px, down from 56): about 14 species fit on a phone screen instead of 10. The + and − buttons still fill the row's height, with slightly smaller symbols.
+
 ## v0.7.3 — 2026-11-22
 - More birds on the count screen: about 10 rows on a phone, up from about 4. Conditions have moved out of the top of the screen into a sheet opened by the **Conditions** button in the bottom bar. The button shows ✓ when all are filled in and ⚠ when any are missing. The sheet only pops up by itself on a count with nothing carried over. Saving with some missing still asks first, then opens the sheet if you say no.
 - The "% of past counts" line under each species is gone. Species are still ordered by how often they turn up on that line. "Added by you" still shows.

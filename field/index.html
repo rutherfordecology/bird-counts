@@ -102,12 +102,12 @@
   #condSum { margin-top: 10px; font-size: 13px; opacity: .9; }
   #condBtn.missing { border-color: var(--warn); color: var(--warn); font-weight: 700; }
   #spList { flex: 1; overflow: auto; padding-bottom: 8px; }
-  .sp { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 56px; user-select: none; }
-  .sp .minus { width: 52px; align-self: stretch; border: 0; border-radius: 0; font-size: 26px; color: var(--muted); background: none; padding: 0; }
-  .sp .name { flex: 1; padding: 8px 4px; }
-  .sp .name small { display: block; color: var(--muted); font-size: 12px; }
-  .sp .n { min-width: 40px; text-align: center; font-size: 22px; font-weight: 800; color: #bbb; }
-  .sp .plus { width: 64px; align-self: stretch; border: 0; border-radius: 0; font-size: 30px; font-weight: 700; background: #eef5f0; color: var(--accent); padding: 0; }
+  .sp { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 34px; user-select: none; }
+  .sp .minus { width: 52px; align-self: stretch; border: 0; border-radius: 0; font-size: 22px; color: var(--muted); background: none; padding: 0; }
+  .sp .name { flex: 1; padding: 1px 4px; line-height: 1.15; font-size: 15px; }
+  .sp .name small { display: block; color: var(--muted); font-size: 11px; }
+  .sp .n { min-width: 40px; text-align: center; font-size: 18px; font-weight: 800; color: #bbb; }
+  .sp .plus { width: 64px; align-self: stretch; border: 0; border-radius: 0; font-size: 26px; font-weight: 700; background: #eef5f0; color: var(--accent); padding: 0; }
   .sp.has { background: #eef7f1; }
   .sp.has .n { color: var(--accent); }
   .locked .sp .plus, .locked .sp .minus { opacity: .3; pointer-events: none; }
@@ -279,7 +279,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.7.3';
+const VERSION = '0.7.5';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
