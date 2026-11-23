@@ -1,5 +1,8 @@
 # Bird Count Field — changelog
 
+## v0.7.7 — 2026-11-24
+- Photopoints at the same spot as a station can be seen. Photopoints are now purple rings, wider than a station's dot and drawn under it, so a shared spot shows as a station with a purple halo. At Waimata, 18 of the 76 photopoints are within 5 m of a station and used to be hidden under it. Tap the ring for the photopoint, or the middle for the station.
+
 ## v0.7.6 — 2026-11-22
 - Sun now carries over from the last count like the other conditions. Before, it was always left blank, so after tapping Done on unchanged conditions the button still showed ⚠ and Save still said Sun was missing. Change it in the sheet if the sun was different.
 

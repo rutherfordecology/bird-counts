@@ -279,7 +279,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.7.6';
+const VERSION = '0.7.7';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
@@ -564,7 +564,9 @@ const toNext = L.polyline([], { color: '#fff', weight: 3, dashArray: '6 6', opac
 
 function drawPoints() {
   ptLayer.clearLayers();
-  (S.survey.photos || []).forEach(p => L.circleMarker([p.lat, p.lng], { radius: 4, color: '#fff', weight: 1.5, fillColor: '#b02fb8', fillOpacity: .9 })
+  // Photopoints are purple rings, wider than a station's dot and drawn under it: one at the same spot as a
+  // station shows as a halo around it. Tap the ring for the photopoint, the middle for the station.
+  (S.survey.photos || []).forEach(p => L.circleMarker([p.lat, p.lng], { radius: 13, color: '#b02fb8', weight: 3, fillColor: '#b02fb8', fillOpacity: .3 })
     .bindPopup(`Photopoint ${esc(p.name)}`).addTo(ptLayer));
   // each loop joined in point order, so there's a route to follow; the chosen loop stands out
   loops().forEach(lp => {
