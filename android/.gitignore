@@ -4,3 +4,5 @@ build/
 local.properties
 # Copied in at build time from ../field and vendor/ by the copyPage task.
 app/src/main/assets/
+# Your own keys, baked into the APK at build time. Never commit: the repo is public.
+secrets.properties

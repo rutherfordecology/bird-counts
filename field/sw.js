@@ -1,7 +1,7 @@
 // Bird Count Field: works offline.
 // - App files and libraries: cached on install, served cache-first.
 // - Map tiles: served from the offline cache when present (downloaded from Setup, or seen before).
-const APP = 'bc-app-v0.7.7';
+const APP = 'bc-app-v0.8.1';
 const TILES = 'bc-tiles-v1';
 const APP_FILES = [
   './', './index.html', './species.js', './manifest.webmanifest', './icon.svg',
@@ -20,9 +20,10 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 
-const isTile = url => /server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery\/MapServer\/tile\//.test(url) || /tile\.opentopomap\.org\//.test(url);
+const isTile = url => /server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery\/MapServer\/tile\//.test(url) || /tile\.opentopomap\.org\//.test(url) || /basemaps\.linz\.govt\.nz\/v1\/tiles\//.test(url);
 // Topo tiles come from a., b. or c. subdomains: store and look them up under one name.
-const tileKey = url => url.replace(/^https:\/\/[abc]\.tile\.opentopomap\.org\//, 'https://a.tile.opentopomap.org/');
+// and without any ?api= key, so a new LINZ key doesn't strand the saved map (the page does the same)
+const tileKey = url => url.replace(/^https:\/\/[abc]\.tile\.opentopomap\.org\//, 'https://a.tile.opentopomap.org/').replace(/\?.*$/, '');
 
 self.addEventListener('fetch', e => {
   const url = e.request.url;
@@ -33,7 +34,7 @@ self.addEventListener('fetch', e => {
       const hit = await cache.match(key);
       if (hit) return hit;
       try {
-        const r = await fetch(key, { mode: 'cors' });
+        const r = await fetch(url, { mode: 'cors' });   // the real address: the key is only the name it's saved under
         if (r.ok) cache.put(key, r.clone());      // keep tiles you've looked at, too
         return r;
       } catch (err) { return new Response('', { status: 504 }); }

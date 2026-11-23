@@ -183,6 +183,12 @@
     </div>
     <div class="card">
       <h2>Offline map</h2>
+      <label class="f" for="linzKey">LINZ Basemaps key, for sharper NZ aerial (free from basemaps.linz.govt.nz)</label>
+      <div class="row">
+        <input id="linzKey" type="password" style="flex:1;min-width:0" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="c01…">
+        <button id="linzSave">Use</button>
+      </div>
+      <div class="muted" id="linzState" style="margin:6px 0 10px"></div>
       <div class="muted">Download the map around your points while you have signal. It is kept on this phone.</div>
       <div class="row" style="margin-top:10px">
         <label><input type="checkbox" id="dlTopo"> include topo map</label>
@@ -279,12 +285,15 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.7.7';
+const VERSION = '0.8.1';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
 const HOST = window.BirdHost || null;
 const buzz = p => { p = [].concat(p); if (HOST) HOST.vibrate(p.join(',')); else navigator.vibrate?.(p); };
+// Keys baked into the Android app at build time (android/secrets.properties, never in this public page).
+// Used only when none has been entered in Setup.
+const BAKED = (() => { try { return HOST && HOST.secrets ? JSON.parse(HOST.secrets()) : {}; } catch (e) { return {}; } })();
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---------- state (kept on this phone) ----------
@@ -526,35 +535,73 @@ async function pointMenu(p) {
 // ---------- map ----------
 const map = L.map('map', { zoomControl: false }).setView([-41, 174], 5);
 L.control.zoom({ position: 'bottomleft' }).addTo(map);
-// crossOrigin so tiles can be cached and served offline by the service worker
-const TILES = {
-  aerial: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom: 19, attribution: 'Imagery © Esri' },
-  topo: { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom: 17, attribution: '© OpenTopoMap, © OpenStreetMap contributors' },
+// Aerial from LINZ (sharp NZ imagery, needs your free Basemaps key in Setup), else Esri; topo from OpenTopoMap.
+const TILE_CACHE = 'bc-tiles-v1';
+let LINZ_KEY = ''; try { LINZ_KEY = localStorage.getItem('birdfield.linz') || ''; } catch (e) {}
+if (!LINZ_KEY) LINZ_KEY = BAKED.linz || '';
+const SRC = {
+  linz: { name: 'Aerial (LINZ)', url: 'https://basemaps.linz.govt.nz/v1/tiles/aerial/EPSG:3857/{z}/{x}/{y}.webp?api={k}', native: 19, attribution: 'Imagery © Toitū Te Whenua LINZ, CC BY 4.0' },
+  esri: { name: 'Aerial (Esri)', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', native: 19, attribution: 'Imagery © Esri' },
+  topo: { name: 'Topo', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', native: 17, attribution: '© OpenTopoMap, © OpenStreetMap contributors' },
 };
-const bases = {
-  'Aerial': L.tileLayer(TILES.aerial.url, { maxZoom: 21, maxNativeZoom: 19, crossOrigin: true, attribution: TILES.aerial.attribution }),
-  'Topo': L.tileLayer(TILES.topo.url, { maxZoom: 21, maxNativeZoom: 17, crossOrigin: true, attribution: TILES.topo.attribution }),
-};
-// A tile that can't be had (offline beyond the downloaded zooms, or no imagery that deep) is
-// drawn from the nearest coarser tile there is, enlarged, so zooming in never goes blank.
-const urlAt = (layer, z, x, y) => L.Util.template(layer._url, { s: 'a', z, x, y, r: '' });
-Object.values(bases).forEach(layer => layer.on('tileerror', e => {
-  const tile = e.tile, { x, y, z } = e.coords;
+const aerialSrc = () => LINZ_KEY ? SRC.linz : SRC.esri;
+const tileFor = (src, z, x, y) => L.Util.template(src.url, { s: 'a', z, x, y, k: LINZ_KEY });
+// Saved under the address without its ?api= key, so a new key doesn't strand the saved map.
+// Topo comes from a., b. or c. servers: saved under one name.
+const tileKey = url => url.replace(/^https:\/\/[abc]\.tile\.opentopomap\.org\//, 'https://a.tile.opentopomap.org/').replace(/\?.*$/, '');
+// Every tile is looked for on the phone first, then fetched (and kept). The page does this itself, so the
+// saved map works even where the service worker isn't running.
+async function loadTile(url) {
+  const key = tileKey(url);
+  let cache = null;
+  try { cache = await caches.open(TILE_CACHE); const hit = await cache.match(key); if (hit) return URL.createObjectURL(await hit.blob()); } catch (e) {}
+  const r = await fetch(url, { mode: 'cors' });
+  if (!r.ok) throw new Error('tile ' + r.status);
+  if (cache) try { await cache.put(key, r.clone()); } catch (e) {}
+  return URL.createObjectURL(await r.blob());
+}
+const CachedTiles = L.TileLayer.extend({
+  createTile(coords, done) {
+    const img = document.createElement('img'); img.alt = ''; img.setAttribute('role', 'presentation');
+    loadTile(this.getTileUrl(coords)).then(src => {
+      img.onload = () => done(null, img); img.onerror = () => done(new Error('bad tile'), img); img.src = src;
+    }, err => done(err, img));
+    return img;
+  },
+});
+// Phone screens have 2-3 pixels per point, so on those each 256-pixel tile comes from one zoom deeper and
+// fills 128 points: twice as sharp at every zoom.
+const RETINA = (window.devicePixelRatio || 1) > 1.5;
+function makeLayer(src) {
+  const o = { maxZoom: 21, attribution: src.attribution, k: LINZ_KEY };
+  Object.assign(o, RETINA ? { tileSize: 128, zoomOffset: 1, maxNativeZoom: src.native - 1 } : { maxNativeZoom: src.native });
+  const layer = new CachedTiles(src.url, o);
+  layer.on('tileunload', e => { if (e.tile.src.startsWith('blob:')) URL.revokeObjectURL(e.tile.src); });
+  layer.on('tileerror', e => fillFromParent(layer, e));
+  return layer;
+}
+// A tile that can't be had (offline beyond the downloaded area or zooms, or no imagery that deep) is drawn
+// from the nearest coarser tile there is, enlarged, so the map never goes blank.
+async function fillFromParent(layer, e) {
+  const tile = e.tile, { x, y } = e.coords, z = e.coords.z + (layer.options.zoomOffset || 0);
   if (tile._fromParent) return; tile._fromParent = true;
-  (async () => {
-    for (let up = 1; up <= 6 && z - up >= 0; up++) {
-      const k = 2 ** up, img = new Image(); img.crossOrigin = 'anonymous';
-      const ok = await new Promise(r => { img.onload = () => r(true); img.onerror = () => r(false); img.src = urlAt(layer, z - up, Math.floor(x / k), Math.floor(y / k)); });
-      if (!ok) continue;
-      const cv = document.createElement('canvas'); cv.width = cv.height = 256;
-      const s = img.naturalWidth / k, ctx = cv.getContext('2d'); ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, (x % k) * s, (y % k) * s, s, s, 0, 0, 256, 256);
-      try { tile.src = cv.toDataURL('image/jpeg', .9); } catch (err) {}
-      return;
-    }
-  })();
-}));
-bases.Aerial.addTo(map);
+  for (let up = 1; up <= 6 && z - up >= 0; up++) {
+    const k = 2 ** up;
+    let src; try { src = await loadTile(L.Util.template(layer._url, { ...layer.options, s: 'a', z: z - up, x: Math.floor(x / k), y: Math.floor(y / k) })); } catch (err) { continue; }
+    const img = new Image();
+    if (!(await new Promise(r => { img.onload = () => r(true); img.onerror = () => r(false); img.src = src; }))) { URL.revokeObjectURL(src); continue; }
+    const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+    const s = img.naturalWidth / k, ctx = cv.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, (x % k) * s, (y % k) * s, s, s, 0, 0, 256, 256);
+    URL.revokeObjectURL(src);
+    tile.onload = tile.onerror = null;
+    try { tile.src = cv.toDataURL('image/jpeg', .9); } catch (err) {}
+    return;
+  }
+}
+const bases = {};
+[...(LINZ_KEY ? [SRC.linz] : []), SRC.esri, SRC.topo].forEach(src => bases[src.name] = makeLayer(src));
+Object.values(bases)[0].addTo(map);
 L.control.layers(bases, null, { position: 'topright' }).addTo(map);
 L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
 const ptLayer = L.layerGroup().addTo(map);
@@ -1126,6 +1173,8 @@ const GH_KEY = 'birdfield.github';
 const GH = Object.assign({ repo: 'rutherfordecology/bird-count-data', token: '', phone: Math.random().toString(36).slice(2, 6), dirty: [], last: '', error: '' },
   (() => { try { return JSON.parse(localStorage.getItem(GH_KEY)) || {}; } catch (e) { return {}; } })());
 const ghSave = () => { try { localStorage.setItem(GH_KEY, JSON.stringify(GH)); } catch (e) {} };
+// The app's built-in key, unless you've entered your own or tapped Forget key
+if (!GH.token && !GH.forgotBaked && BAKED.githubToken) { GH.token = BAKED.githubToken; if (BAKED.githubRepo) GH.repo = BAKED.githubRepo; }
 ghSave();
 let ghBusy = false;
 function markDayChanged(date) {
@@ -1250,13 +1299,13 @@ $('ghSaveBtn').onclick = async () => {
 $('ghSyncBtn').onclick = () => syncNow(true);
 $('ghForgetBtn').onclick = () => {
   if (!GH.token || !confirm('Remove the access key from this phone? Counts stop uploading until you add it again.')) return;
-  GH.token = ''; $('ghToken').value = ''; ghSave(); showGhStatus(); refreshAll();
+  GH.token = ''; GH.forgotBaked = true; $('ghToken').value = ''; ghSave(); showGhStatus(); refreshAll();
 };
 
 // ---------- offline map download ----------
 const lon2x = (lng, z) => Math.floor((lng + 180) / 360 * 2 ** z);
 const lat2y = (lat, z) => Math.floor((1 - Math.log(Math.tan(rad(lat)) + 1 / Math.cos(rad(lat))) / Math.PI) / 2 * 2 ** z);
-// Tiles within `buf` metres of any point: zoom 10-14 across the whole area, 15-18 only near the points.
+// Tiles within `buf` metres of any point: zoom 10-14 across the whole area, 15-19 only near the points.
 function tilesFor(pts, withTopo) {
   const out = new Set();
   const add = (z, lat0, lat1, lng0, lng1, near) => {
@@ -1275,16 +1324,18 @@ function tilesFor(pts, withTopo) {
   for (let z = 10; z <= 14; z++) add(z, la0, la1, ln0, ln1, 0);
   for (let z = 15; z <= 17; z++) add(z, la0, la1, ln0, ln1, z === 17 ? 250 : 500);
   add(18, la0, la1, ln0, ln1, 150);   // aerial only (topo stops at 17), close around each point
+  add(19, la0, la1, ln0, ln1, 60);    // and the deepest aerial right at each point, for the sharpest view where you stand
   return [...out];
 }
-const tileUrl = t => { const [k, z, x, y] = t.split('/'); return k === 'aerial' ? `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}` : `https://a.tile.opentopomap.org/${z}/${x}/${y}.png`; };
+// aerial comes from whichever the map shows: LINZ with a key, else Esri
+const tileUrl = t => { const [k, z, x, y] = t.split('/'); return tileFor(k === 'aerial' ? aerialSrc() : SRC.topo, z, x, y); };
 async function downloadTiles(pts) {
   if (!pts.length) return toast('Load points first.');
   if (!('caches' in window)) return alert('This browser can\'t store maps offline.');
   const tiles = tilesFor(pts, $('dlTopo').checked);
-  const cache = await caches.open('bc-tiles-v1');
+  const cache = await caches.open(TILE_CACHE);
   const todo = [];
-  for (const t of tiles) if (!(await cache.match(tileUrl(t)))) todo.push(t);
+  for (const t of tiles) if (!(await cache.match(tileKey(tileUrl(t))))) todo.push(t);
   if (!todo.length) { $('dlStatus').textContent = `All ${tiles.length} map tiles are already on this phone.`; return; }
   if (!confirm(`Download ${todo.length} map tiles (about ${Math.round(todo.length * 0.025)} MB)? ${tiles.length - todo.length} are already saved.`)) return;
   $('dlProg').hidden = false;
@@ -1293,7 +1344,7 @@ async function downloadTiles(pts) {
   const worker = async () => {
     while (todo.length) {
       const t = todo.shift();
-      try { const r = await fetch(tileUrl(t), { mode: 'cors' }); if (r.ok) await cache.put(tileUrl(t), r); else failed++; } catch (e) { failed++; }
+      try { const r = await fetch(tileUrl(t), { mode: 'cors' }); if (r.ok) await cache.put(tileKey(tileUrl(t)), r); else failed++; } catch (e) { failed++; }
       done++; bar.style.width = (100 * done / (done + todo.length)) + '%';
       $('dlStatus').textContent = `Downloading… ${done} tiles`;
     }
@@ -1303,6 +1354,14 @@ async function downloadTiles(pts) {
   let est = ''; try { const e = await navigator.storage.estimate(); est = ` Using ${Math.round(e.usage / 1e6)} MB on this phone.`; } catch (e) {}
   $('dlStatus').textContent += est;
 }
+// The key is kept apart from your data, so it never ends up in a backup or export
+$('linzKey').value = LINZ_KEY;
+$('linzState').textContent = LINZ_KEY ? 'Aerial: LINZ. Download the map again to keep the LINZ imagery offline.' : 'Aerial: Esri (no LINZ key).';
+$('linzSave').onclick = () => {
+  const k = $('linzKey').value.trim();
+  try { if (k) localStorage.setItem('birdfield.linz', k); else localStorage.removeItem('birdfield.linz'); } catch (e) {}
+  location.reload();
+};
 $('dlBtn').onclick = () => downloadTiles(S.survey.points);
 $('dlLoopBtn').onclick = () => downloadTiles(loopPoints());
 

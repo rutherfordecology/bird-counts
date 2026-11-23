@@ -1,5 +1,15 @@
 # Bird Count Field — changelog
 
+## v0.8.1 — 2026-11-24
+- Android app: your LINZ key and GitHub access key can be built into the APK, from `android/secrets.properties` on the laptop. That file is git-ignored and never goes into the public repo or the web app. The app uses them whenever none has been entered in Setup, so a fresh install needs no setup. A key typed in Setup still wins. "Forget key" turns off the built-in GitHub key on that phone too. Keep the APK to yourself, as anyone with it could pull the keys out.
+- Web app: no change.
+
+## v0.8.0 — 2026-11-24
+- Sharper aerial imagery: with your LINZ Basemaps key (Setup → Offline map, the same free key as the Forest Monitor planner), the map shows LINZ aerial, which is much sharper over NZ than Esri. Without a key it stays on Esri. The layer menu offers Aerial (LINZ), Aerial (Esri) and Topo. The key is kept apart from your data, so it never ends up in a backup or export.
+- Sharper on phone screens: phones have 2–3 pixels per point, so tiles now come from one zoom level deeper and look twice as sharp at every zoom.
+- Saved map tiles load more reliably: the page now looks for each tile on the phone itself before going to the network, instead of relying only on the service worker. That's what may have left tiles blank in the field.
+- The map download adds the deepest aerial (zoom 19) within 60 m of each point. It saves whichever aerial the map shows, so download again after adding a LINZ key.
+
 ## v0.7.7 — 2026-11-24
 - Photopoints at the same spot as a station can be seen. Photopoints are now purple rings, wider than a station's dot and drawn under it, so a shared spot shows as a station with a purple halo. At Waimata, 18 of the 76 photopoints are within 5 m of a station and used to be hidden under it. Tap the ring for the photopoint, or the middle for the station.
 

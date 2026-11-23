@@ -22,6 +22,21 @@ the current `field/` files (page, species, service worker, sites) and Leaflet in
 assets at build time. `versionName` and `versionCode` come from `VERSION` in
 `../field/index.html` (`0.7.0` gives 700). `local.properties` holds the SDK path.
 
+## Built-in keys (optional, your own APK only)
+
+`secrets.properties` (next to this README, git-ignored) can hold your keys:
+
+```
+linzKey=...
+githubToken=...
+githubRepo=rutherfordecology/bird-count-data
+```
+
+They become `BuildConfig` fields, and the page reads them through `BirdHost.secrets()` when
+nothing has been entered in Setup. They never go into `field/` or any commit. This repo is
+public, and GitHub revokes tokens it finds in public repos. Anyone with the APK can pull
+them out, so don't share an APK built with keys.
+
 ## Installing
 
 Copy the APK to the phone, tap it in Files, and allow installs from that source once.

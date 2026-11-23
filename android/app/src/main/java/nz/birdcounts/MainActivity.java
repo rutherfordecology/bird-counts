@@ -347,6 +347,20 @@ public class MainActivity extends android.app.Activity {
                     .show());
         }
 
+        /** Keys baked in at build time from android/secrets.properties; blank when not set. */
+        @JavascriptInterface
+        public String secrets() {
+            try {
+                return new JSONObject()
+                        .put("linz", BuildConfig.LINZ_KEY)
+                        .put("githubToken", BuildConfig.GITHUB_TOKEN)
+                        .put("githubRepo", BuildConfig.GITHUB_REPO)
+                        .toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
+
         @JavascriptInterface
         public String appBuild() {
             try {

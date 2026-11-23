@@ -20,9 +20,26 @@ def appVersionCode = {
     return p[0] * 10000 + p[1] * 100 + p[2]
 }()
 
+/**
+ * Your own keys, from android/secrets.properties (git-ignored: the repo is
+ * public). They go into this APK only, never the page on GitHub Pages. A key
+ * left blank or a missing file just means the app asks for it in Setup.
+ */
+def secrets = new Properties()
+def secretsFile = rootProject.file('secrets.properties')
+if (secretsFile.exists()) secretsFile.withInputStream { secrets.load(it) }
+def secret = { String name ->
+    def v = (secrets.getProperty(name) ?: '').trim()
+    return '"' + v.replace('\\', '\\\\').replace('"', '\\"') + '"'
+}
+
 android {
     namespace 'nz.birdcounts'
     compileSdk 37
+
+    buildFeatures {
+        buildConfig true
+    }
 
     defaultConfig {
         applicationId "nz.birdcounts.field"
@@ -30,6 +47,9 @@ android {
         targetSdk 37
         versionCode appVersionCode
         versionName appVersionName
+        buildConfigField 'String', 'LINZ_KEY', secret('linzKey')
+        buildConfigField 'String', 'GITHUB_TOKEN', secret('githubToken')
+        buildConfigField 'String', 'GITHUB_REPO', secret('githubRepo')
     }
 
     buildTypes {
