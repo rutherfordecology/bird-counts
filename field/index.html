@@ -209,7 +209,7 @@
         <div style="flex:1"><label class="f" for="radius">Arrival alert within (m)</label><input id="radius" type="number" min="5" max="200" style="width:100%"></div>
       </div>
       <label class="f"><input type="checkbox" id="keepAwake"> keep the screen on while the app is open</label>
-      <label class="f"><input type="checkbox" id="sound"> beep as well as vibrate</label>
+      <label class="f"><input type="checkbox" id="sound"> beep as well as vibrate on arrival</label>
       <label class="f app-only" hidden><input type="checkbox" id="bgAlerts"> alert with the screen off too (keeps GPS on, so uses more battery)</label>
       <div class="muted app-only" id="bgStatus" hidden style="margin-top:4px"></div>
       <div class="row" style="margin-top:10px"><button id="testAlertBtn">Test alert</button></div>
@@ -285,7 +285,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="species.js"></script>
 <script>
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 const $ = id => document.getElementById(id);
 // Inside the Android app (android/), the app's bridge: native vibration, saving files,
 // and the service that alerts with the screen off. Null in a browser.
@@ -727,7 +727,7 @@ function beep(freqs) {
 }
 function alertUser(kind) {
   if (kind === 'arrive') { buzz([400, 150, 400, 150, 400]); beep([880, 1175, 1568]); }
-  if (kind === 'done') { buzz([800, 200, 800]); beep([1568, 1175, 880, 1568]); }
+  if (kind === 'done') buzz([800, 200, 800]);   // vibrate only: no sound at the end of a count
 }
 
 // ---------- Android app: alerts with the screen off ----------

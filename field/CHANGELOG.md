@@ -1,5 +1,8 @@
 # Bird Count Field — changelog
 
+## v0.8.2 — 2026-11-24
+- No sound when the 5 minutes are up, just a vibration. This applies on screen and, in the Android app, with the screen off. Arrival at a point still beeps if "beep as well as vibrate" is on in Setup.
+
 ## v0.8.1 — 2026-11-24
 - Android app: your LINZ key and GitHub access key can be built into the APK, from `android/secrets.properties` on the laptop. That file is git-ignored and never goes into the public repo or the web app. The app uses them whenever none has been entered in Setup, so a fresh install needs no setup. A key typed in Setup still wins. "Forget key" turns off the built-in GitHub key on that phone too. Keep the APK to yourself, as anyone with it could pull the keys out.
 - Web app: no change.

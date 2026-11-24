@@ -79,7 +79,7 @@ public class AlertService extends Service implements LocationListener {
     private PowerManager.WakeLock countLock;
 
     private final Runnable countDone = () -> {
-        if (!MainActivity.visible) alert("Count done", "Time is up" + (countPoint.isEmpty() ? "" : " at " + countPoint) + ".", null);
+        if (!MainActivity.visible) alert("Count done", "Time is up" + (countPoint.isEmpty() ? "" : " at " + countPoint) + ".", null, false);
         countEndsAt = 0;
         releaseCountLock();
     };
@@ -198,7 +198,7 @@ public class AlertService extends Service implements LocationListener {
             if (!MainActivity.visible) {
                 lastArrival = hit.id;
                 lastArrivalAt = System.currentTimeMillis();
-                alert("You're at " + hit.name, "Tap to open the count.", hit.id);
+                alert("You're at " + hit.name, "Tap to open the count.", hit.id, sound);
             }
         }
         long now = System.currentTimeMillis();
@@ -242,7 +242,7 @@ public class AlertService extends Service implements LocationListener {
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build();
         NotificationChannel loud = new NotificationChannel(CH_ALERT, "Arrival and count alerts", NotificationManager.IMPORTANCE_HIGH);
-        loud.setDescription("You've reached a point, or the count time is up. Sound and vibration.");
+        loud.setDescription("You've reached a point. Sound and vibration.");
         loud.enableVibration(true);
         loud.setVibrationPattern(BUZZ);
         loud.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), aa);
@@ -277,10 +277,11 @@ public class AlertService extends Service implements LocationListener {
                 .build();
     }
 
-    private void alert(String title, String text, @Nullable String pointId) {
+    /** withSound false: vibrate only (the end of a count never beeps). */
+    private void alert(String title, String text, @Nullable String pointId, boolean withSound) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
-        Notification n = new NotificationCompat.Builder(this, sound ? CH_ALERT : CH_ALERT_QUIET)
+        Notification n = new NotificationCompat.Builder(this, withSound ? CH_ALERT : CH_ALERT_QUIET)
                 .setSmallIcon(R.drawable.ic_stat_bird)
                 .setContentTitle(title)
                 .setContentText(text)
